@@ -1,0 +1,52 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap');
+@import 'leaflet/dist/leaflet.css';
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; font-family: 'Poppins', Arial, sans-serif; background: #f4f7fb; }
+body { min-width: 320px; }
+
+.lookup-trigger{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:40px;padding:9px 11px;border:1px solid #dce3ec!important;border-radius:8px;background:#fff!important;text-align:left;color:#253751!important}.lookup-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}.lookup-trigger b{flex:0 0 auto;color:#1764c1;font-size:9px}.lookup-backdrop{position:fixed;inset:0;z-index:2100;display:grid;place-items:center;padding:24px;background:#071a35b8;backdrop-filter:blur(4px)}.household-lookup-modal{width:min(620px,100%);max-height:min(720px,90vh);display:flex;flex-direction:column;min-height:0;padding:22px;border-radius:15px;background:#fff;box-shadow:0 30px 80px #071a3566}.lookup-search{display:grid;gap:6px;color:#526177;font-size:9px;font-weight:700}.lookup-search input{width:100%;padding:11px;border:1px solid #dce3ec;border-radius:8px;outline:0}.lookup-search input:focus{border-color:#1764c1;box-shadow:0 0 0 3px #1764c115}.household-lookup-results{min-height:0;margin-top:14px;overflow:auto;border:1px solid #e4e9f0;border-radius:10px}.household-lookup-results>button{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:0;border-top:1px solid #edf1f5;background:#fff;text-align:left}.household-lookup-results>button:first-child{border-top:0}.household-lookup-results>button:hover,.household-lookup-results>button.selected{background:#eaf3ff}.household-lookup-results b,.household-lookup-results small{display:block}.household-lookup-results b{font-size:10px}.household-lookup-results small{margin-top:3px;color:#7f8b9c;font-size:8px}.household-lookup-results i{color:#1764c1;font-size:8px;font-style:normal;font-weight:700}
+.table-head>button{display:flex;align-items:center;gap:5px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:700;letter-spacing:inherit;text-align:left}.table-head>button:hover{color:#0758c7}.table-head>button i{font-size:10px;font-style:normal}.session-loader{position:fixed;inset:0;display:grid;place-content:center;justify-items:center;gap:12px;background:#f4f7fb;color:#526177}.session-loader span{width:48px;height:48px;display:grid;place-items:center;border-radius:13px;background:#0758c7;color:#fff;font-weight:800;box-shadow:0 10px 30px #0758c733}.session-loader p{margin:0;font-size:10px}
+.public-toast{position:fixed;right:22px;bottom:22px;z-index:2200;display:grid;grid-template-columns:30px minmax(0,1fr) 26px;align-items:center;gap:10px;width:min(440px,calc(100vw - 32px));padding:13px 14px;border:1px solid #a9ddbd;border-radius:12px;background:#f0fbf4;color:#226c43;box-shadow:0 18px 45px #153b2960;animation:toast-in .22s ease-out}.public-toast>span{width:30px;height:30px;display:grid;place-items:center;border-radius:50%;background:#2b9b61;color:#fff;font-weight:800}.public-toast p{margin:0;font-size:10px;font-weight:600;line-height:1.5}.public-toast button{border:0;background:transparent;color:inherit;font-size:19px}@keyframes toast-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@media(max-width:600px){.public-toast{right:16px;bottom:16px}}
+
+.incident-map-marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 3px solid white;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px #2348;
+  color: white;
+  font-weight: 800;
+}
+
+.major-incident-marker::before,
+.major-incident-marker::after {
+  position: absolute;
+  inset: -5px;
+  content: '';
+  border: 3px solid #d95050;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: major-incident-pulse 1.8s ease-out infinite;
+}
+
+.major-incident-marker::after {
+  animation-delay: .6s;
+}
+
+@keyframes major-incident-pulse {
+  0% { opacity: .9; transform: scale(.75); }
+  80%, 100% { opacity: 0; transform: scale(2.2); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .major-incident-marker::before,
+  .major-incident-marker::after {
+    animation: none;
+    opacity: .45;
+    transform: scale(1.35);
+  }
+}

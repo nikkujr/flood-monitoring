@@ -1,0 +1,42 @@
+# Local toolchains and dependencies
+.runtime/
+.pnpm-store/
+**/node_modules/
+
+# Build, cache, test, and coverage output
+**/dist/
+**/.angular/
+**/.cache/
+**/coverage/
+**/out-tsc/
+**/tmp/
+
+# Environment files and local secrets
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Runtime uploads (retain the directory placeholder)
+backend/storage/uploads/*
+!backend/storage/uploads/.gitkeep
+
+# Logs and process files
+*.log
+*.pid
+*.seed
+npm-debug.log*
+
+# IDE and operating-system files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Codex/local agent state
+.agents/
+.codex/
