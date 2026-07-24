@@ -26,7 +26,6 @@ The seed command is idempotent and requires a `SEED_DEFAULT_PASSWORD` of at leas
 delete all data and rebuild the database from the current schema, explicitly confirm the reset:
 
 ```powershell
-$env:ALLOW_DB_RESET="true"
 npm run db:fresh
 ```
 

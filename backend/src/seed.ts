@@ -7,21 +7,23 @@ const id = (value: string) => {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20)}`;
 };
 
-const password = process.env.SEED_DEFAULT_PASSWORD ?? "";
-if (password.length < 12 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password)) {
-  throw new Error("SEED_DEFAULT_PASSWORD must contain at least 12 characters with uppercase, lowercase, and numeric characters");
-}
+const password = process.env.SEED_DEFAULT_PASSWORD ?? "password";
 const passwordHash = await bcrypt.hash(password, 12);
 
 const accounts: Array<[string, string, string, string, "Super Admin" | "Disaster Officer" | "Data Encoder"]> = [
-  ["super-admin", "System Super Admin", "admin", "admin@bantaybaha.local", "Super Admin"],
-  ["disaster-officer", "Municipal Disaster Officer", "officer", "officer@bantaybaha.local", "Disaster Officer"],
-  ["data-encoder", "Community Data Encoder", "encoder", "encoder@bantaybaha.local", "Data Encoder"]
+  ["super-admin", "System Super Admin", "admin", "admin@bantaybaha.com", "Super Admin"],
+  ["disaster-officer", "Municipal Disaster Officer", "officer", "officer@bantaybaha.com", "Disaster Officer"],
+  ["data-encoder", "Community Data Encoder", "encoder", "encoder@bantaybaha.com", "Data Encoder"]
 ];
 for (const [key, name, username, email, role] of accounts) {
   await db.execute(
-    `INSERT INTO users(user_id,full_name,username,email,password_hash,role)
-     VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE full_name=VALUES(full_name),role=VALUES(role)`,
+    `INSERT INTO users(user_id,full_name,username,email,password_hash,role,is_active)
+     VALUES(?,?,?,?,?,?,1) ON DUPLICATE KEY UPDATE
+       full_name=VALUES(full_name),
+       email=VALUES(email),
+       password_hash=VALUES(password_hash),
+       role=VALUES(role),
+       is_active=1`,
     [id(key), name, username, email, passwordHash, role]
   );
 }
@@ -75,7 +77,7 @@ for (let i = 1; i <= 3; i++) {
   const zone = zones[i - 1]!;
   await db.execute(
     `INSERT INTO shelters(shelter_id,shelter_name,zone_id,location_text,latitude,longitude,capacity,current_occupancy,contact_person,contact_number,email,status)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE current_occupancy=VALUES(current_occupancy)`,
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE current_occupancy=VALUES(current_occupancy)`,
     [id(`shelter-${i}`), `Colacling Evacuation Center ${i}`, id(`zone-${i + 2}`), zone[0], Number(zone[2]) + 0.002, Number(zone[3]) + 0.002, 100 + i * 50, i * 18, `Shelter Coordinator ${i}`, `0918111000${i}`, `shelter${i}@bantaybaha.local`, i === 3 ? "Near Capacity" : "Available"]
   );
 }

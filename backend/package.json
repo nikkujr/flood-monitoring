@@ -7,8 +7,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "db:init": "tsx src/database.ts init",
-    "db:fresh": "tsx src/database.ts fresh",
+    "db:init": "tsx src/database.ts init && tsx src/seed.ts",
+    "db:fresh": "tsx src/database.ts fresh && tsx src/seed.ts",
     "seed": "tsx src/seed.ts",
     "seed:users": "tsx src/seed-users.ts"
   },

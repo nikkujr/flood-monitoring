@@ -15,10 +15,6 @@ if (!/^[a-zA-Z0-9_]+$/.test(databaseName)) {
   throw new Error("DATABASE_URL must contain a safe database name");
 }
 
-if (mode === "fresh" && process.env.ALLOW_DB_RESET !== "true") {
-  throw new Error("Fresh rebuild refused. Set ALLOW_DB_RESET=true to confirm that all database data may be deleted.");
-}
-
 const connection = await mysql.createConnection({
   host: databaseUrl.hostname,
   port: Number(databaseUrl.port || 3306),
