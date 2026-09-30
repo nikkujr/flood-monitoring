@@ -29,6 +29,12 @@ delete all data and rebuild the database from the current schema, explicitly con
 npm run db:fresh
 ```
 
+Run `npm run db:init` before deploying account recovery changes. Existing databases receive
+`users.must_change_password` and `users.credential_version` without resetting account data.
+For emailed password resets in production, set `SMTP_HOST` and `PASSWORD_RESET_URL` in the
+backend environment. A Super Admin can generate a one-time temporary password when email
+delivery is unavailable; the account holder must change it at the next sign-in.
+
 ## SMARTERASP.NET deployment package
 
 Run `./build-smarterasp.ps1` from PowerShell to produce a single-site deployment under

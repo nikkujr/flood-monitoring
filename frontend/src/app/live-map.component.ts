@@ -17,6 +17,8 @@ type MapStyle = 'roadmap' | 'satellite' | 'hybrid' | 'terrain';
         <button type="button" [class.active]="mapStyle === 'satellite'" (click)="setMapStyle('satellite')">Satellite</button>
       </div>
       <div class="leaflet-host" [id]="mapId" aria-label="Live flood map"></div>
+      @if (mapLoading) { <div class="map-status" role="status">Loading map data…</div> }
+      @if (mapError) { <div class="map-status error" role="alert">{{ mapError }} <button type="button" (click)="refresh()">Retry</button></div> }
       @if (full) {
         <details class="map-legend-control" open>
           <summary><span>Map legend</span><small>Visible layers</small></summary>
@@ -64,7 +66,9 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
   private officialBoundary?: GeoJSON.GeoJsonObject;
   private boundaryFitted = false;
   private visibleLayerKey = '';
-  mapStyle: MapStyle = 'hybrid';
+  mapStyle: MapStyle = 'roadmap';
+  mapLoading = true;
+  mapError = '';
   private fallbackLayers?: Partial<Record<MapStyle, L.TileLayer>>;
   private googleLayers: Partial<Record<MapStyle, L.Layer>> = {};
   private activeBaseLayer?: L.Layer;
@@ -75,7 +79,7 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
   ngAfterViewInit() {
     this.map = L.map(this.mapId, {
       minZoom: environment.mapMinZoom,
-      maxZoom: environment.mapMaxZoom
+      maxZoom: Math.min(environment.mapMaxZoom, 18)
     }).setView(environment.mapCenter, environment.mapInitialZoom);
     const mapElement = document.getElementById(this.mapId);
     if (mapElement && typeof ResizeObserver !== 'undefined') {
@@ -86,24 +90,24 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
       this.resizeObserver.observe(mapElement);
     }
     const roadmapLayer = L.tileLayer(environment.mapTileUrl, {
-      maxZoom: environment.mapMaxZoom,
+      maxZoom: 18,
       attribution: '© Esri, HERE, Garmin, FAO, NOAA, USGS, and contributors'
     });
     const satelliteLayer = L.tileLayer(environment.mapSatelliteTileUrl, {
-      maxZoom: environment.mapMaxZoom,
+      maxZoom: 18,
       attribution: '© Esri, Maxar, Earthstar Geographics, and the GIS User Community'
     });
     const terrainLayer = L.tileLayer(environment.mapTileUrl, {
-      maxZoom: environment.mapMaxZoom,
+      maxZoom: 18,
       attribution: '© Esri, HERE, Garmin, FAO, NOAA, USGS, and contributors'
     });
     this.satelliteLabels = L.tileLayer(environment.mapSatelliteLabelsTileUrl, {
-      maxZoom: environment.mapMaxZoom,
+      maxZoom: 18,
       opacity: .9,
       attribution: '© Esri'
     });
     L.tileLayer(environment.mapHydroTileUrl, {
-      maxZoom: environment.mapMaxZoom,
+      maxZoom: 18,
       opacity: .85,
       attribution: '© Esri'
     }).addTo(this.map);
@@ -112,10 +116,8 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
     this.activeBaseLayer = roadmapLayer;
     this.overlay.addTo(this.map);
     this.focusOverlay.addTo(this.map);
-    this.loadOfficialBoundary();
     this.refresh();
     this.focusSelectedRecord();
-    void this.setMapStyle('hybrid', true);
     this.timer = window.setInterval(() => this.refresh(), 30_000);
   }
 
@@ -134,19 +136,22 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
 
   async setMapStyle(style: MapStyle, force = false) {
     if (!this.map || !this.fallbackLayers || (!force && this.mapStyle === style)) return;
-    this.activeBaseLayer?.remove();
-    if (this.satelliteLabels) this.map.removeLayer(this.satelliteLabels);
+    let nextLayer: L.Layer;
+    let useFallback = false;
     try {
       if (!environment.googleMapsApiKey) throw new Error('Google Maps API key is not configured');
       await this.loadGoogleMapsApi();
-      this.googleLayers[style] ??= new GoogleMutant({ type: style, maxZoom: environment.mapMaxZoom });
-      this.activeBaseLayer = this.googleLayers[style];
-      this.activeBaseLayer?.addTo(this.map);
+      this.googleLayers[style] ??= new GoogleMutant({ type: style, maxZoom: 18 });
+      nextLayer = this.googleLayers[style]!;
     } catch {
-      this.activeBaseLayer = this.fallbackLayers[style];
-      this.activeBaseLayer?.addTo(this.map);
-      if (style === 'satellite' || style === 'hybrid') this.satelliteLabels?.addTo(this.map);
+      nextLayer = this.fallbackLayers[style]!;
+      useFallback = true;
     }
+    nextLayer.addTo(this.map);
+    if (this.activeBaseLayer && this.activeBaseLayer !== nextLayer) this.activeBaseLayer.remove();
+    this.satelliteLabels?.remove();
+    if (useFallback && (style === 'satellite' || style === 'hybrid')) this.satelliteLabels?.addTo(this.map);
+    this.activeBaseLayer = nextLayer;
     this.mapStyle = style;
   }
 
@@ -169,14 +174,17 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
     });
   }
 
-  private refresh() {
+  refresh() {
+    this.mapLoading = !this.lastData;
+    this.mapError = '';
     this.api.liveMap().subscribe({
       next: (value) => {
+        this.mapLoading = false;
         this.lastData = value as Record<string, any>;
         this.render(this.lastData);
         this.dataUpdated.emit(value as Record<string, unknown>);
       },
-      error: () => undefined
+      error: () => { this.mapLoading = false; this.mapError = 'Map data could not be loaded.'; }
     });
   }
 
@@ -260,7 +268,7 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
         '',
         isMajorIncident
       ).on('click', () => this.incidentSelected.emit(report));
-      if (this.showLabels) reportMarker.bindTooltip(this.escape(report.incident_type ?? report.location_text ?? 'Flood report'), {
+      if (this.showLabels) reportMarker.bindTooltip(this.escape(report.incident_type ?? String(report.location_text ?? 'Flood report').replace(/\s*\(-?\d{1,2}(?:\.\d+)?,\s*-?\d{1,3}(?:\.\d+)?\)/g, '')), {
         permanent: true,
         direction: 'top',
         offset: L.point(0, -15),

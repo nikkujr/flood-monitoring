@@ -10,6 +10,7 @@ export interface SessionUser {
   username: string;
   email: string;
   role: 'Super Admin' | 'Disaster Officer' | 'Data Encoder';
+  mustChangePassword: boolean;
 }
 
 export interface WeatherData {
@@ -80,6 +81,19 @@ export class ApiService {
     return this.http.post<void>(`${this.baseUrl}/auth/reset-password`, { token, password });
   }
 
+  changePassword(currentPassword: string, newPassword: string) {
+    return this.http.post<{ accessToken: string; user: SessionUser }>(
+      `${this.baseUrl}/auth/change-password`, { currentPassword, newPassword }, { withCredentials: true }
+    ).pipe(tap(({ accessToken, user }) => {
+      this.accessToken.set(accessToken);
+      this.user.set(user);
+    }));
+  }
+
+  generateTemporaryPassword(id: string) {
+    return this.http.post<{ temporaryPassword: string }>(`${this.baseUrl}/users/${id}/temporary-password`, {});
+  }
+
   list<T>(resource: string, page = 1, pageSize = 20, search = '', sortBy = '', sortOrder: 'asc' | 'desc' = 'desc', filters: Record<string, string> = {}) {
     let params = new HttpParams().set('page', page).set('pageSize', pageSize).set('search', search).set('sortOrder', sortOrder);
     if (sortBy) params = params.set('sortBy', sortBy);
@@ -114,8 +128,8 @@ export class ApiService {
     );
   }
 
-  assignResidents(shelterId: string, residentIds: string[], evacuationAt: string) {
-    return this.http.post<{ message: string; assignedCount: number }>(`${this.baseUrl}/shelters/${shelterId}/assignments`, { residentIds, evacuationAt });
+  assignResidents(shelterId: string, residentIds: string[], evacuationAt: string, evacuationStatus: 'Safe' | 'For Monitoring' | 'For Evacuation' | 'Evacuated') {
+    return this.http.post<{ message: string; assignedCount: number }>(`${this.baseUrl}/shelters/${shelterId}/assignments`, { residentIds, evacuationAt, evacuationStatus });
   }
 
   returnResidentHome(residentId: string, returnedAt: string) {

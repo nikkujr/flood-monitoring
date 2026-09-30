@@ -1,6 +1,7 @@
 # Local toolchains and dependencies
 .runtime/
 .pnpm-store/
+.tmp/
 **/node_modules/
 
 # Build, cache, test, and coverage output

@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
   username VARCHAR(80) NOT NULL UNIQUE,
   email VARCHAR(190) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
+  must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
+  credential_version INT NOT NULL DEFAULT 0,
   role ENUM('Super Admin','Disaster Officer','Data Encoder') NOT NULL,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   last_login_at DATETIME NULL,

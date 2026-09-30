@@ -40,3 +40,5 @@
   .map-style-control button{font-size:10px}
   .map-legend-control{width:178px}
 }
+.map-status{position:absolute;left:12px;top:90px;z-index:1000;max-width:calc(100% - 24px);padding:8px 11px;border-radius:7px;background:#fff;color:#40506a;box-shadow:0 2px 8px #15304a2e;font-size:10px}.map-status.error{color:#a72f2f}.map-status button{border:0;background:transparent;color:#0758c7;font-weight:700;cursor:pointer}
+.map-shell{isolation:isolate}

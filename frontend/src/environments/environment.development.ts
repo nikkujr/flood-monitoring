@@ -4,7 +4,7 @@ export const environment = {
   mapCenter: [13.7828976, 122.8852784] as [number, number],
   mapInitialZoom: 14,
   mapMinZoom: 12,
-  mapMaxZoom: 20,
+  mapMaxZoom: 18,
   googleMapsApiKey: '',
   mapTileUrl: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
   mapSatelliteTileUrl: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',

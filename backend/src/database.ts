@@ -34,6 +34,21 @@ try {
     .replace("USE bantay_baha;", `USE \`${databaseName}\`;`);
   await connection.query(schema);
 
+  const [passwordChangeColumns] = await connection.query<mysql.RowDataPacket[]>(
+    "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='users' AND COLUMN_NAME='must_change_password'",
+    [databaseName]
+  );
+  if (!passwordChangeColumns.length) {
+    await connection.query(`ALTER TABLE \`${databaseName}\`.users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE AFTER password_hash`);
+  }
+  const [credentialVersionColumns] = await connection.query<mysql.RowDataPacket[]>(
+    "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='users' AND COLUMN_NAME='credential_version'",
+    [databaseName]
+  );
+  if (!credentialVersionColumns.length) {
+    await connection.query(`ALTER TABLE \`${databaseName}\`.users ADD COLUMN credential_version INT NOT NULL DEFAULT 0 AFTER must_change_password`);
+  }
+
   // Compatibility cleanup for databases created before risk zones and
   // evacuation shelters replaced the monitoring-station feature.
   await connection.query(`ALTER TABLE \`${databaseName}\`.zones MODIFY risk_level ENUM('Low','Medium','High') NULL`);

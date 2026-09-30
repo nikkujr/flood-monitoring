@@ -40,7 +40,6 @@ for (const user of users) {
      VALUES(?,?,?,?,?,?,1)
      ON DUPLICATE KEY UPDATE
        full_name=VALUES(full_name),
-       password_hash=VALUES(password_hash),
        email=VALUES(email),
        role=VALUES(role),
        is_active=1`,

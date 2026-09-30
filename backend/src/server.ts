@@ -121,11 +121,11 @@ app.post("/api/auth/login", asyncRoute(async (req, res) => {
   if (!row || !(await bcrypt.compare(input.password, row.password_hash))) {
     return res.status(401).json({ message: "Invalid username or password" });
   }
-  const user: AuthUser = { userId: row.user_id, username: row.username, role: row.role };
+  const user: AuthUser = { userId: row.user_id, username: row.username, role: row.role, credentialVersion: row.credential_version };
   const refreshToken = await createRefreshToken(user);
   await db.execute("UPDATE users SET last_login_at=NOW() WHERE user_id=?", [user.userId]);
   res.cookie("refreshToken", refreshToken, refreshCookie);
-  res.json({ accessToken: createAccessToken(user), user: { ...user, fullName: row.full_name, email: row.email } });
+  res.json({ accessToken: createAccessToken(user), user: { ...user, fullName: row.full_name, email: row.email, mustChangePassword: Boolean(row.must_change_password) } });
 }));
 
 app.post("/api/auth/refresh", asyncRoute(async (req, res) => {
@@ -145,7 +145,7 @@ app.post("/api/auth/logout", asyncRoute(async (req, res) => {
 
 app.get("/api/auth/me", requireAuth, asyncRoute(async (req: AuthRequest, res) => {
   const [rows] = await db.execute<any[]>(
-    "SELECT user_id userId,full_name fullName,username,email,role,is_active isActive,last_login_at lastLoginAt FROM users WHERE user_id=?",
+    "SELECT user_id userId,full_name fullName,username,email,role,is_active isActive,must_change_password mustChangePassword,last_login_at lastLoginAt FROM users WHERE user_id=?",
     [req.user!.userId]
   );
   res.json(rows[0]);
@@ -153,20 +153,27 @@ app.get("/api/auth/me", requireAuth, asyncRoute(async (req: AuthRequest, res) =>
 
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 async function issuePasswordReset(userId: string, email: string) {
+  if (!config.smtpHost && config.isProduction) throw new Error("Password recovery email is not configured");
   const token = randomBytes(32).toString("hex");
+  const id = randomUUID();
   await db.execute(
     "INSERT INTO password_reset_tokens(password_reset_token_id,user_id,token_hash,expires_at) VALUES(?,?,?,DATE_ADD(NOW(),INTERVAL 30 MINUTE))",
-    [randomUUID(), userId, tokenHash(token)]
+    [id, userId, tokenHash(token)]
   );
   if (config.smtpHost) {
     const transport = nodemailer.createTransport({
       host: config.smtpHost, port: config.smtpPort, secure: config.smtpSecure,
       auth: config.smtpUser ? { user: config.smtpUser, pass: config.smtpPassword } : undefined
     });
-    await transport.sendMail({
-      from: config.smtpFrom, to: email, subject: "Reset your BantayBaha password",
-      text: `Reset your password within 30 minutes: ${config.passwordResetUrl}?token=${token}`
-    });
+    try {
+      await transport.sendMail({
+        from: config.smtpFrom, to: email, subject: "Reset your BantayBaha password",
+        text: `Reset your password within 30 minutes: ${config.passwordResetUrl}?token=${token}`
+      });
+    } catch (error) {
+      await db.execute("DELETE FROM password_reset_tokens WHERE password_reset_token_id=?", [id]);
+      throw error;
+    }
   } else if (!config.isProduction) {
     console.info(`Development password reset URL: ${config.passwordResetUrl}?token=${token}`);
   } else {
@@ -177,7 +184,10 @@ async function issuePasswordReset(userId: string, email: string) {
 app.post("/api/auth/forgot-password", asyncRoute(async (req, res) => {
   const { email } = z.object({ email: z.string().email() }).parse(req.body);
   const [rows] = await db.execute<any[]>("SELECT user_id,email FROM users WHERE email=? AND is_active=1 LIMIT 1", [email]);
-  if (rows[0]) await issuePasswordReset(rows[0].user_id, rows[0].email);
+  if (rows[0]) {
+    try { await issuePasswordReset(rows[0].user_id, rows[0].email); }
+    catch (error) { console.error("Password recovery delivery failed:", error instanceof Error ? error.message : "Unknown error"); }
+  }
   res.status(202).json({ message: "If an active account exists, password-reset instructions will be sent." });
 }));
 
@@ -194,7 +204,7 @@ app.post("/api/auth/reset-password", asyncRoute(async (req, res) => {
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
-    await connection.execute("UPDATE users SET password_hash=? WHERE user_id=?", [await bcrypt.hash(input.password, 12), rows[0].user_id]);
+    await connection.execute("UPDATE users SET password_hash=?,must_change_password=0,credential_version=credential_version+1 WHERE user_id=?", [await bcrypt.hash(input.password, 12), rows[0].user_id]);
     await connection.execute("UPDATE password_reset_tokens SET used_at=NOW() WHERE password_reset_token_id=?", [rows[0].password_reset_token_id]);
     await connection.execute("UPDATE refresh_tokens SET revoked_at=NOW() WHERE user_id=? AND revoked_at IS NULL", [rows[0].user_id]);
     await connection.commit();
@@ -205,6 +215,32 @@ app.post("/api/auth/reset-password", asyncRoute(async (req, res) => {
     connection.release();
   }
   res.status(204).end();
+}));
+
+app.post("/api/auth/change-password", requireAuth, asyncRoute(async (req: AuthRequest, res) => {
+  const input = z.object({
+    currentPassword: z.string().min(1),
+    newPassword: z.string().min(12).regex(/[A-Z]/).regex(/[a-z]/).regex(/\d/)
+  }).parse(req.body);
+  const [rows] = await db.execute<any[]>("SELECT password_hash,username,role,full_name,email,credential_version FROM users WHERE user_id=? AND is_active=1", [req.user!.userId]);
+  const row = rows[0];
+  if (!row || !(await bcrypt.compare(input.currentPassword, row.password_hash))) {
+    return res.status(400).json({ message: "Current password is incorrect.", fieldErrors: { currentPassword: "Current password is incorrect." } });
+  }
+  if (input.currentPassword === input.newPassword) {
+    return res.status(400).json({ message: "Choose a different new password.", fieldErrors: { newPassword: "Choose a different new password." } });
+  }
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute("UPDATE users SET password_hash=?,must_change_password=0,credential_version=credential_version+1 WHERE user_id=?", [await bcrypt.hash(input.newPassword, 12), req.user!.userId]);
+    await connection.execute("UPDATE refresh_tokens SET revoked_at=NOW() WHERE user_id=? AND revoked_at IS NULL", [req.user!.userId]);
+    await connection.commit();
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+  const user: AuthUser = { userId: req.user!.userId, username: row.username, role: row.role, credentialVersion: row.credential_version + 1 };
+  const refreshToken = await createRefreshToken(user);
+  res.cookie("refreshToken", refreshToken, refreshCookie);
+  res.json({ accessToken: createAccessToken(user), user: { ...user, fullName: row.full_name, email: row.email, mustChangePassword: false } });
 }));
 
 const userInput = z.object({
@@ -256,8 +292,28 @@ app.put("/api/users/:id/active-status", requireAuth, requireRoles("Super Admin")
 app.post("/api/users/:id/reset-password", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => {
   const [rows] = await db.execute<any[]>("SELECT user_id,email FROM users WHERE user_id=? AND is_active=1 LIMIT 1", [String(req.params.id)]);
   if (!rows[0]) return res.status(404).json({ message: "Active user account not found" });
-  await issuePasswordReset(rows[0].user_id, rows[0].email);
-  res.status(202).json({ message: "Password-reset instructions have been initiated." });
+  if (config.isProduction && !config.smtpHost) return res.status(503).json({ message: "Email delivery is not configured. Generate a temporary password or configure SMTP." });
+  try {
+    await issuePasswordReset(rows[0].user_id, rows[0].email);
+  } catch {
+    return res.status(502).json({ message: "Email delivery failed. Check the SMTP settings or generate a temporary password." });
+  }
+  res.status(202).json({ message: config.smtpHost ? `A reset link was sent to ${rows[0].email}.` : "Development reset link was written to the API log; no email was sent." });
+}));
+app.post("/api/users/:id/temporary-password", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => {
+  const id = String(req.params.id);
+  const [rows] = await db.execute<any[]>("SELECT user_id FROM users WHERE user_id=? AND is_active=1", [id]);
+  if (!rows[0]) return res.status(404).json({ message: "Active user account not found" });
+  const temporaryPassword = `T7a!${randomBytes(18).toString("base64url")}`;
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute("UPDATE users SET password_hash=?,must_change_password=1,credential_version=credential_version+1 WHERE user_id=?", [await bcrypt.hash(temporaryPassword, 12), id]);
+    await connection.execute("UPDATE refresh_tokens SET revoked_at=NOW() WHERE user_id=? AND revoked_at IS NULL", [id]);
+    await connection.execute("UPDATE password_reset_tokens SET used_at=NOW() WHERE user_id=? AND used_at IS NULL", [id]);
+    await connection.commit();
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+  res.set("Cache-Control", "no-store").json({ temporaryPassword });
 }));
 
 const photoStorage = multer.diskStorage({
@@ -441,6 +497,42 @@ app.put("/api/flood-reports/:id/status", requireAuth, requireRoles("Super Admin"
   res.status(204).end();
 }));
 
+app.delete("/api/flood-reports/:id", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => {
+  const reportId = String(req.params.id);
+  const connection = await db.getConnection();
+  let photoUrls: unknown;
+  try {
+    await connection.beginTransaction();
+    const [reports] = await connection.query<any[]>("SELECT photo_urls FROM flood_reports WHERE report_id=? FOR UPDATE", [reportId]);
+    if (!reports[0]) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Flood report not found" });
+    }
+    photoUrls = reports[0].photo_urls;
+    await connection.execute("UPDATE notifications SET flood_report_id=NULL WHERE flood_report_id=?", [reportId]);
+    await connection.execute("DELETE FROM flood_report_zones WHERE report_id=?", [reportId]);
+    await connection.execute("DELETE FROM flood_reports WHERE report_id=?", [reportId]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  try {
+    const files = typeof photoUrls === "string" ? JSON.parse(photoUrls) : photoUrls;
+    if (Array.isArray(files)) await Promise.all(files.map(async (storedPath) => {
+      if (typeof storedPath !== "string") return;
+      const absolutePath = resolve(config.uploadRoot, storedPath.replaceAll("\\", "/").replace(/^\/+/, ""));
+      if (!relative(config.uploadRoot, absolutePath).replaceAll("\\", "/").startsWith("flood-reports/")) return;
+      await unlink(absolutePath).catch(() => undefined);
+    }));
+  } catch {
+    // A malformed legacy photo list must not undo the committed report deletion.
+  }
+  res.status(204).end();
+}));
+
 app.get("/api/map/live", asyncRoute(async (_req, res) => {
   const [[zones], [riskZones], [shelters], [reports], [routes]] = await Promise.all([
     db.query(`SELECT z.*,
@@ -555,6 +647,14 @@ const resources: Record<string, ResourceConfig> = {
 };
 
 const baseTable = (table: string) => table.split(" ")[0]!;
+function validPhilippineContactNumber(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text) return true;
+  if (text.length > 30 || !/^\+?[0-9() -]+$/.test(text)) return false;
+  const digits = text.replace(/[() -]/g, "");
+  const local = digits.startsWith("+63") ? `0${digits.slice(3)}` : digits;
+  return /^09\d{9}$/.test(local) || /^0[2-8]\d{7,9}$/.test(local) || /^[1-9]\d{6,7}$/.test(local);
+}
 async function validateResource(path: string, body: Record<string, any>, recordId?: string) {
   for (const [key, value] of Object.entries(body)) {
     if (key.toLowerCase().includes("email") && value && !z.string().email().safeParse(value).success) throw new z.ZodError([{ code: "custom", path: [key], message: "Invalid email format" }]);
@@ -607,9 +707,6 @@ async function validateResource(path: string, body: Record<string, any>, recordI
         throw new z.ZodError([{ code: "custom", path: ["evacuationShelterId"], message: "The selected evacuation center is already at full capacity" }]);
       }
     }
-    for (const field of ["contactNumber", "emergencyContactNumber"]) {
-      if (body[field] && !/^\d+$/.test(String(body[field]))) throw new z.ZodError([{ code: "custom", path: [field], message: `${field} must contain digits only` }]);
-    }
     if (body.fullName && body.dateOfBirth && body.householdId) {
       const [duplicates] = await db.query<any[]>(
         "SELECT resident_id FROM residents WHERE full_name=? AND date_of_birth=? AND household_id=? AND (? IS NULL OR resident_id!=?) LIMIT 1",
@@ -630,6 +727,11 @@ async function validateResource(path: string, body: Record<string, any>, recordI
       if (!validStatuses.includes(String(body.verificationStatus))) {
         throw new z.ZodError([{ code: "custom", path: ["verificationStatus"], message: "Select a valid household verification status" }]);
       }
+    }
+  }
+  for (const field of path === "residents" ? ["contactNumber", "emergencyContactNumber"] : path === "households" ? ["contactNumber"] : []) {
+    if (!validPhilippineContactNumber(body[field])) {
+      throw new z.ZodError([{ code: "custom", path: [field], message: "Enter a valid Philippine mobile or landline number." }]);
     }
   }
   if (path === "barangay-zones" && body.zoneColor !== undefined && !/^#[0-9a-f]{6}$/i.test(String(body.zoneColor))) {
@@ -684,7 +786,8 @@ function mysqlDateTime(date: Date) {
 app.post("/api/shelters/:id/assignments", requireAuth, requireRoles("Super Admin", "Disaster Officer", "Data Encoder"), asyncRoute(async (req: AuthRequest, res) => {
   const input = z.object({
     residentIds: z.array(z.string().uuid()).min(1).max(100).transform((ids) => [...new Set(ids)]),
-    evacuationAt: z.coerce.date()
+    evacuationAt: z.coerce.date(),
+    evacuationStatus: z.enum(["Safe", "For Monitoring", "For Evacuation", "Evacuated"]).default("Evacuated")
   }).parse(req.body);
   const shelterId = String(req.params.id);
   const connection = await db.getConnection();
@@ -713,14 +816,14 @@ app.post("/api/shelters/:id/assignments", requireAuth, requireRoles("Super Admin
       "SELECT COUNT(*) occupancy FROM residents WHERE evacuation_shelter_id=? AND evacuation_status='Evacuated' AND record_status='Active'",
       [shelterId]
     );
-    if (Number(occupancyRows[0]?.occupancy ?? 0) + residents.length > Number(shelter.capacity)) {
+    if (input.evacuationStatus === "Evacuated" && Number(occupancyRows[0]?.occupancy ?? 0) + residents.length > Number(shelter.capacity)) {
       await connection.rollback();
       return res.status(409).json({ message: "Not enough remaining capacity for the selected residents" });
     }
     const affectedShelters = residents.map((resident) => resident.evacuation_shelter_id);
     for (const resident of residents) {
       const action = resident.evacuation_status === "Evacuated" && resident.evacuation_shelter_id ? "Transferred" : "Assigned";
-      await connection.execute("UPDATE residents SET evacuation_shelter_id=?,evacuation_status='Evacuated' WHERE resident_id=?", [shelterId, resident.resident_id]);
+      await connection.execute("UPDATE residents SET evacuation_shelter_id=?,evacuation_status=? WHERE resident_id=?", [shelterId, input.evacuationStatus, resident.resident_id]);
       await connection.execute(
         "INSERT INTO evacuation_assignments(assignment_id,resident_id,shelter_id,action,evacuation_at,recorded_by_user_id) VALUES(?,?,?,?,?,?)",
         [randomUUID(), resident.resident_id, shelterId, action, mysqlDateTime(input.evacuationAt), req.user!.userId]
@@ -1068,9 +1171,16 @@ app.get("/api/notifications", requireAuth, requireRoles("Super Admin", "Disaster
     sortFields: ["title", "type", "severity_level", "target_audience", "status", "sent_at", "created_at", "updated_at"]
   })
 ));
+app.get("/api/notifications/:id", requireAuth, requireRoles("Super Admin", "Disaster Officer"), asyncRoute(async (req, res) => {
+  const id = String(req.params.id);
+  const [rows] = await db.execute<any[]>("SELECT notification_id,title,message,type,severity_level,target_audience,status FROM notifications WHERE notification_id=?", [id]);
+  if (!rows[0]) return res.status(404).json({ message: "Notification not found" });
+  const [zones] = await db.execute<any[]>("SELECT zone_id FROM notification_target_zones WHERE notification_id=?", [id]);
+  res.json({ ...rows[0], zone_ids: zones.map((zone) => zone.zone_id) });
+}));
 app.post("/api/notifications", requireAuth, requireRoles("Super Admin", "Disaster Officer"), asyncRoute(async (req, res) => {
   const input = notificationInput.parse(req.body);
-  if (input.targetAudience === "Affected Zones" && !input.zoneIds.length) return res.status(400).json({ message: "Affected Zones notifications require at least one zone" });
+  if (input.targetAudience === "Affected Zones" && !input.zoneIds.length) return res.status(400).json({ message: "Select at least one affected zone.", fieldErrors: { zoneIds: "Select at least one affected zone." } });
   const id = randomUUID();
   const connection = await db.getConnection();
   try {
@@ -1079,7 +1189,7 @@ app.post("/api/notifications", requireAuth, requireRoles("Super Admin", "Disaste
       "INSERT INTO notifications(notification_id,flood_report_id,title,message,type,severity_level,target_audience) VALUES(?,?,?,?,?,?,?)",
       [id, input.floodReportId ?? null, input.title, input.message, input.type, input.severityLevel, input.targetAudience]
     );
-    for (const zoneId of input.zoneIds) await connection.execute("INSERT INTO notification_target_zones(notification_id,zone_id) VALUES(?,?)", [id, zoneId]);
+    for (const zoneId of input.targetAudience === "Affected Zones" ? input.zoneIds : []) await connection.execute("INSERT INTO notification_target_zones(notification_id,zone_id) VALUES(?,?)", [id, zoneId]);
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -1089,6 +1199,7 @@ app.post("/api/notifications", requireAuth, requireRoles("Super Admin", "Disaste
 }));
 app.put("/api/notifications/:id", requireAuth, requireRoles("Super Admin", "Disaster Officer"), asyncRoute(async (req, res) => {
   const input = notificationInput.parse(req.body);
+  if (input.targetAudience === "Affected Zones" && !input.zoneIds.length) return res.status(400).json({ message: "Select at least one affected zone.", fieldErrors: { zoneIds: "Select at least one affected zone." } });
   const [existing] = await db.query<any[]>("SELECT status FROM notifications WHERE notification_id=?", [String(req.params.id)]);
   if (!existing[0]) return res.status(404).json({ message: "Notification not found" });
   if (existing[0].status !== "Draft") return res.status(409).json({ message: "Only draft notifications can be edited" });
@@ -1100,7 +1211,7 @@ app.put("/api/notifications/:id", requireAuth, requireRoles("Super Admin", "Disa
       [input.floodReportId ?? null, input.title, input.message, input.type, input.severityLevel, input.targetAudience, String(req.params.id)]
     );
     await connection.execute("DELETE FROM notification_target_zones WHERE notification_id=?", [String(req.params.id)]);
-    for (const zoneId of input.zoneIds) await connection.execute("INSERT INTO notification_target_zones(notification_id,zone_id) VALUES(?,?)", [String(req.params.id), zoneId]);
+    for (const zoneId of input.targetAudience === "Affected Zones" ? input.zoneIds : []) await connection.execute("INSERT INTO notification_target_zones(notification_id,zone_id) VALUES(?,?)", [String(req.params.id), zoneId]);
     await connection.commit();
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
   res.status(204).end();
@@ -1284,6 +1395,7 @@ app.use(async (error: any, req: express.Request, res: express.Response, _next: e
   const validationIssues = error instanceof z.ZodError ? error.issues.map(readableInputIssue) : [];
   const status =
     validationIssues.length ? 400 :
+    error?.status === 401 ? 401 :
     error?.type === "entity.parse.failed" ? 400 :
     ["LIMIT_FILE_SIZE", "LIMIT_FILE_COUNT"].includes(error?.code) ? 413 :
     error?.code === "ER_DUP_ENTRY" ? 409 :
@@ -1300,7 +1412,10 @@ app.use(async (error: any, req: express.Request, res: express.Response, _next: e
       : status === 500
         ? "The server could not complete the request. Please try again."
         : error.message);
-  res.status(status).json({ message, issues: validationIssues.length ? validationIssues : undefined });
+  const fieldErrors = error instanceof z.ZodError
+    ? Object.fromEntries(error.issues.map((issue) => [String(issue.path[0] ?? 'form'), readableInputIssue(issue)]))
+    : undefined;
+  res.status(status).json({ message, issues: validationIssues.length ? validationIssues : undefined, fieldErrors });
 });
 
 app.listen(config.port, () => console.log(`BantayBaha API listening on http://localhost:${config.port}`));

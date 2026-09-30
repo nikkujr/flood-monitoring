@@ -41,6 +41,11 @@ Use a MySQL 8.4 database initialized with `backend/sql/schema.sql`, configure `b
 - [ ] Map data refreshes every 30 seconds.
 - [ ] Role permissions are enforced for zones, stations, shelters, volunteers, routes, and emergency contacts.
 - [ ] Shelter occupancy cannot be negative or exceed capacity.
+- [ ] On a phone, tapping a configured barangay zone places or moves a report pin; Clear removes it, and an out-of-zone tap shows a useful error.
+- [ ] Road map opens first on live maps and report pickers; Satellite keeps the current pin and labels.
+- [ ] Map data failures show Retry while loaded tiles remain usable; zoom stops before unavailable close-up tiles.
+- [ ] Layer controls wrap without icon/label overlap, and older saved coordinate labels are shown without raw numbers.
+- [ ] The mobile admin sidebar covers the map with a backdrop and closes when its backdrop is selected.
 
 ## Notifications and decision support
 
@@ -49,6 +54,14 @@ Use a MySQL 8.4 database initialized with `backend/sql/schema.sql`, configure `b
 - [ ] Public and affected-zone advisories display without authentication.
 - [ ] Overall risk follows the Low/Medium/High calculation in the PRD.
 - [ ] Zone breakdown and evacuation-priority views use validated reports only.
+- [ ] Editing a draft loads its saved message and affected zones; Send saves current edits before delivery.
+- [ ] Affected-zone advisories require zone selections, while other audiences do not; invalid fields show inline errors and receive focus.
+
+## Filters and recovery
+
+- [ ] Flood Report, Resident, and Household filters open within the phone viewport with a backdrop; Apply and Reset close the panel and update the active filter count.
+- [ ] Super Admin can generate a temporary password once, give it to the account holder, and invalidate earlier sessions.
+- [ ] The account holder must replace a temporary password before accessing admin pages. An emailed reset link still works when SMTP is configured.
 
 ## Operational and responsive behavior
 
@@ -61,4 +74,5 @@ Use a MySQL 8.4 database initialized with `backend/sql/schema.sql`, configure `b
 
 - Frontend Angular production compilation: passing.
 - Backend TypeScript strict compilation: passing.
-- Full database-backed runtime acceptance: requires a configured local MySQL service.
+- Isolated MySQL preview smoke checks: report pin placement and satellite retention; all three filter panels and Household Apply/Reset; notification edit, send, and archive; temporary password sign-in, forced change, and previous-session rejection.
+- Full manual acceptance on a physical phone and the deployed SMTP service remains to be checked.

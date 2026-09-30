@@ -21,7 +21,6 @@ for (const [key, name, username, email, role] of accounts) {
      VALUES(?,?,?,?,?,?,1) ON DUPLICATE KEY UPDATE
        full_name=VALUES(full_name),
        email=VALUES(email),
-       password_hash=VALUES(password_hash),
        role=VALUES(role),
        is_active=1`,
     [id(key), name, username, email, passwordHash, role]

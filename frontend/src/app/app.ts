@@ -1,6 +1,6 @@
 import { ChangeDetectorRef, Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { catchError, finalize, forkJoin, of } from 'rxjs';
+import { catchError, finalize, forkJoin, of, switchMap } from 'rxjs';
 import { ApiService, ResidentYearSummary, WeatherData } from './api.service';
 import { LiveMapComponent } from './live-map.component';
 import { PolygonEditorComponent } from './polygon-editor.component';
@@ -13,13 +13,22 @@ type EditorOption = { value: string; label: string };
 type EditorField = {
   name: string;
   label: string;
-  type?: 'text' | 'email' | 'password' | 'number' | 'date' | 'color' | 'textarea' | 'select' | 'multiselect' | 'polygon' | 'location' | 'household-lookup';
+  type?: 'text' | 'tel' | 'email' | 'password' | 'number' | 'date' | 'color' | 'textarea' | 'select' | 'multiselect' | 'polygon' | 'location' | 'household-lookup';
   required?: boolean;
   placeholder?: string;
   options?: EditorOption[];
 };
 
 const options = (...values: string[]): EditorOption[] => values.map((value) => ({ value, label: value }));
+
+function validPhilippineContactNumber(value: unknown) {
+  const text = String(value ?? '').trim();
+  if (!text) return true;
+  if (text.length > 30 || !/^\+?[0-9() -]+$/.test(text)) return false;
+  const digits = text.replace(/[() -]/g, '');
+  const local = digits.startsWith('+63') ? `0${digits.slice(3)}` : digits;
+  return /^09\d{9}$/.test(local) || /^0[2-8]\d{7,9}$/.test(local) || /^[1-9]\d{6,7}$/.test(local);
+}
 
 @Component({
   selector: 'app-root',
@@ -48,6 +57,8 @@ export class App implements OnInit, OnDestroy {
   editorOpen = false;
   editorId = '';
   editorValues: Record<string, unknown> = {};
+  fieldErrors: Record<string, string> = {};
+  temporaryPassword = '';
   selectedMapFocus?: { id: string; resource: string; record: Record<string, unknown>; nonce: number };
   mapRefreshNonce = 0;
   householdOptions: EditorOption[] = [];
@@ -81,6 +92,9 @@ export class App implements OnInit, OnDestroy {
   pendingReportCount = 0;
   dashboardAlert?: Record<string, unknown>;
   dashboardNotifications: Record<string, unknown>[] = [];
+  headerNotificationsOpen = false;
+  headerNotificationsLoading = false;
+  headerNotificationsError = '';
   publicNotifications: Record<string, unknown>[] = [];
   publicContacts: Record<string, unknown>[] = [];
   publicReports: Record<string, unknown>[] = [];
@@ -155,6 +169,7 @@ export class App implements OnInit, OnDestroy {
   selectedAssignmentResidentIds = new Set<string>();
   assignmentSearch = '';
   assignmentAt = '';
+  assignmentEvacuationStatus: 'Safe' | 'For Monitoring' | 'For Evacuation' | 'Evacuated' = 'Evacuated';
 
   tableRows = [
     { name: 'Riverside Zone', id: 'ZONE-001', detail: 'Purok 1 · High-risk area', status: 'Active', updated: '8 min ago' },
@@ -256,7 +271,7 @@ export class App implements OnInit, OnDestroy {
         { name: 'age', label: 'Age', type: 'number' },
         { name: 'dateOfBirth', label: 'Date of birth', type: 'date', required: true },
         { name: 'sex', label: 'Sex', type: 'select', required: true, options: options('Female', 'Male', 'Intersex', 'Prefer not to say', 'Not recorded') },
-        { name: 'contactNumber', label: 'Contact number' }, { name: 'addressLine', label: 'Address', required: true },
+        { name: 'contactNumber', label: 'Contact number', type: 'tel', placeholder: '0917 123 4567 or (054) 123 4567' }, { name: 'addressLine', label: 'Address', required: true },
         { name: 'relationshipToHead', label: 'Relationship to household head', type: 'select', options: options('Head', 'Daughter', 'Son', 'Wife', 'Husband', 'Grandson', 'Granddaughter', 'Relatives', 'Brother', 'Sister', 'Live-in partner', 'Nephew', 'Other') },
         { name: 'vulnerabilityType', label: 'Vulnerability', type: 'select', options: options('Elderly', 'Child', 'Disability', 'Pregnant', 'Mobility-limited', 'Other') },
         { name: 'maritalStatus', label: 'Status', type: 'select', options: options('Widow', 'Single', 'Married') },
@@ -271,7 +286,7 @@ export class App implements OnInit, OnDestroy {
         { name: 'sanitaryToilet', label: 'Sanitary toilet', type: 'select', options: options('With', 'Without') },
         { name: 'canSwim', label: 'Can the resident swim?', type: 'select', options: options('Yes', 'No') },
         { name: 'houseType', label: 'Type of house', type: 'select', options: options('Concrete', 'Semi concrete', 'Light materials') },
-        { name: 'emergencyContactName', label: 'Emergency contact name' }, { name: 'emergencyContactNumber', label: 'Emergency contact number' },
+        { name: 'emergencyContactName', label: 'Emergency contact name' }, { name: 'emergencyContactNumber', label: 'Emergency contact number', type: 'tel', placeholder: 'Mobile or landline number' },
         { name: 'priorityLevel', label: 'Priority level', type: 'select', required: true, options: options('Low', 'Medium', 'High') },
         { name: 'recordStatus', label: 'Resident status', type: 'select', required: true, options: options('Active', 'Inactive') },
         { name: 'evacuationStatus', label: 'Evacuation status', type: 'select', required: true, options: options('Safe', 'For Monitoring', 'For Evacuation', 'Evacuated') },
@@ -281,7 +296,7 @@ export class App implements OnInit, OnDestroy {
         { name: 'householdNumber', label: 'Household number', required: true },
         { name: 'zoneId', label: 'Zone', type: 'select', required: true, options: this.zoneOptions },
         { name: 'addressLine', label: 'Address', required: true }, { name: 'headOfHouseholdName', label: 'Head of household', required: true },
-        { name: 'contactNumber', label: 'Contact number' },
+        { name: 'contactNumber', label: 'Contact number', type: 'tel', placeholder: '0917 123 4567 or (054) 123 4567' },
         { name: 'verificationStatus', label: 'Verification status', type: 'select', required: true, options: options('Pending Verification', 'Verified', 'Rejected') }
       ],
       map: this.currentResource === 'risk-zones' ? [
@@ -311,7 +326,7 @@ export class App implements OnInit, OnDestroy {
         { name: 'type', label: 'Type', type: 'select', required: true, options: options('Flood Advisory', 'Evacuation Notice', 'Safety Advisory', 'System Update') },
         { name: 'severityLevel', label: 'Severity', type: 'select', required: true, options: options('Information', 'Minor Incident', 'Major Incident') },
         { name: 'targetAudience', label: 'Target audience', type: 'select', required: true, options: options('Public', 'Affected Zones', 'Internal Admin Users') },
-        { name: 'zoneIds', label: 'Zone IDs', placeholder: 'Comma-separated for Affected Zones' }
+        { name: 'zoneIds', label: 'Affected zones', type: 'multiselect', options: this.zoneOptions }
       ],
       reports: [
         ...(this.editorId ? [
@@ -359,7 +374,7 @@ export class App implements OnInit, OnDestroy {
       this.sessionResolving = false;
       this.finishLoginLoading();
     })).subscribe({
-      next: () => this.setPage(this.requestedAdminPage ?? 'dashboard', false),
+      next: ({ user }) => { if (!user.mustChangePassword) this.setPage(this.requestedAdminPage ?? 'dashboard', false); },
       error: () => undefined
     });
   }
@@ -388,7 +403,7 @@ export class App implements OnInit, OnDestroy {
     this.errorMessage = '';
     this.loginLoading = true;
     this.api.login(username, password).pipe(finalize(() => this.finishLoginLoading())).subscribe({
-      next: () => this.setPage(this.requestedAdminPage ?? 'dashboard'),
+      next: ({ user }) => { if (!user.mustChangePassword) this.setPage(this.requestedAdminPage ?? 'dashboard'); },
       error: (error) => this.errorMessage = error?.error?.message ?? 'Unable to connect to the BantayBaha API.'
     });
   }
@@ -708,6 +723,52 @@ export class App implements OnInit, OnDestroy {
     if (this.canReviewReports) this.setPage('notifications');
   }
 
+  changeTemporaryPassword(event: Event, currentPassword: string, newPassword: string, confirmation: string) {
+    event.preventDefault();
+    this.errorMessage = '';
+    this.fieldErrors = {};
+    const form = event.currentTarget as HTMLFormElement;
+    if (newPassword !== confirmation) {
+      this.fieldErrors['confirmation'] = 'Passwords do not match.';
+      this.focusEditorField(form, 'confirmation');
+      return;
+    }
+    if (newPassword.length < 12 || !/[A-Z]/.test(newPassword) || !/[a-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      this.fieldErrors['newPassword'] = 'Use at least 12 characters with uppercase, lowercase, and a number.';
+      this.focusEditorField(form, 'newPassword');
+      return;
+    }
+    this.loginLoading = true;
+    this.api.changePassword(currentPassword, newPassword).pipe(finalize(() => this.finishLoginLoading())).subscribe({
+      next: () => { this.fieldErrors = {}; this.setPage(this.requestedAdminPage ?? 'dashboard'); },
+      error: (error) => {
+        const fields = error?.error?.fieldErrors;
+        if (fields && Object.keys(fields).length) {
+          this.fieldErrors = fields;
+          this.focusEditorField(form, Object.keys(fields)[0]!);
+        } else this.errorMessage = error?.error?.message ?? 'Password could not be changed.';
+      }
+    });
+  }
+
+  toggleHeaderNotifications() {
+    this.headerNotificationsOpen = !this.headerNotificationsOpen;
+    if (!this.headerNotificationsOpen) return;
+    this.loadHeaderNotifications();
+  }
+
+  loadHeaderNotifications() {
+    this.headerNotificationsLoading = true;
+    this.headerNotificationsError = '';
+    this.api.dashboardNotifications().pipe(finalize(() => {
+      this.headerNotificationsLoading = false;
+      this.changeDetector.detectChanges();
+    })).subscribe({
+      next: ({ items }) => this.dashboardNotifications = items,
+      error: () => this.headerNotificationsError = 'Recent advisories could not be loaded.'
+    });
+  }
+
   weatherDescription(code: number | undefined) {
     if (code === 0) return 'Clear sky';
     if ([1, 2].includes(code ?? -1)) return 'Partly cloudy';
@@ -741,6 +802,7 @@ export class App implements OnInit, OnDestroy {
   }
 
   setPage(page: PageId, updateHistory = true) {
+    this.headerNotificationsOpen = false;
     this.activePage = page;
     this.requestedAdminPage = page;
     const path = `/admin/${page}`;
@@ -988,6 +1050,7 @@ export class App implements OnInit, OnDestroy {
     this.assignmentOpen = true;
     this.assignmentSearch = '';
     this.assignmentAt = this.localDateTimeValue(new Date());
+    this.assignmentEvacuationStatus = 'Evacuated';
     this.errorMessage = '';
     this.selectedAssignmentResidentIds.clear();
     this.loadAssignmentResidents();
@@ -1026,13 +1089,13 @@ export class App implements OnInit, OnDestroy {
     }
     const occupancy = Number(this.assignmentCenter?.['resident_occupancy'] ?? 0);
     const capacity = Number(this.assignmentCenter?.['capacity'] ?? 0);
-    if (occupancy + this.selectedAssignmentResidentIds.size > capacity) {
+    if (this.assignmentEvacuationStatus === 'Evacuated' && occupancy + this.selectedAssignmentResidentIds.size > capacity) {
       this.errorMessage = `Only ${Math.max(0, capacity - occupancy)} resident slot(s) remain in this evacuation center.`;
       return;
     }
     this.loading = true;
     this.errorMessage = '';
-    this.api.assignResidents(shelterId, [...this.selectedAssignmentResidentIds], evacuationAt.toISOString()).pipe(finalize(() => this.finishLoading())).subscribe({
+    this.api.assignResidents(shelterId, [...this.selectedAssignmentResidentIds], evacuationAt.toISOString(), this.assignmentEvacuationStatus).pipe(finalize(() => this.finishLoading())).subscribe({
       next: ({ message }) => {
         this.closeAssignResidents();
         this.successMessage = message;
@@ -1119,6 +1182,7 @@ export class App implements OnInit, OnDestroy {
     this.editorId = row?.id ?? '';
     const record = row ? this.rawRecords.get(row.id) : undefined;
     this.editorValues = {};
+    this.fieldErrors = {};
     this.existingBarangayZones = this.currentResource === 'barangay-zones'
       ? [...this.rawRecords.values()]
       : [];
@@ -1142,8 +1206,9 @@ export class App implements OnInit, OnDestroy {
       if (routeGeoJson && typeof routeGeoJson === 'object') this.editorValues['routeGeoJson'] = JSON.stringify(routeGeoJson, null, 2);
       this.editorValues['incidentType'] = record['incident_type'] ?? record['incidentType'] ?? '';
       this.editorValues['severityLevel'] = record['severity_level'] ?? record['severityLevel'] ?? 'Information';
-      this.editorValues['locationText'] = record['location_text'] ?? record['locationText'] ?? '';
+      this.editorValues['locationText'] = this.displayLocation(record['location_text'] ?? record['locationText']);
       this.editorValues['description'] = record['description'] ?? '';
+      this.editorValues['status'] = record['status'] ?? '';
       this.editorValues['vulnerabilityOther'] = record['vulnerability_other'] ?? record['vulnerabilityOther'] ?? '';
       this.editorValues['relationshipOther'] = record['relationship_other'] ?? record['relationshipOther'] ?? '';
     }
@@ -1165,6 +1230,22 @@ export class App implements OnInit, OnDestroy {
           this.changeDetector.detectChanges();
         },
         error: (error) => this.errorMessage = error?.error?.message ?? 'Report details could not be loaded.'
+      });
+    }
+    if (this.currentResource === 'notifications' && this.editorId) {
+      this.api.get<Record<string, unknown>>('notifications', this.editorId).subscribe({
+        next: (notification) => {
+          if (!this.editorOpen || this.editorId !== row?.id) return;
+          for (const field of this.editorFields) {
+            const snake = field.name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+            if (field.name === 'zoneIds') continue;
+            this.editorValues[field.name] = notification[field.name] ?? notification[snake] ?? '';
+          }
+          this.editorValues['zoneIds'] = (notification['zone_ids'] as unknown[] ?? []).map(String);
+          this.editorValues['status'] = notification['status'] ?? '';
+          this.changeDetector.detectChanges();
+        },
+        error: (error) => this.errorMessage = error?.error?.message ?? 'Notification details could not be loaded.'
       });
     }
   }
@@ -1319,8 +1400,23 @@ export class App implements OnInit, OnDestroy {
     this.errorMessage = '';
     this.successMessage = '';
     const form = event.currentTarget as HTMLFormElement;
+    this.fieldErrors = {};
     const formData = new FormData(form);
     const raw = Object.fromEntries(formData.entries()) as Record<string, unknown>;
+    for (const field of this.currentResource === 'residents' ? ['contactNumber', 'emergencyContactNumber'] : this.currentResource === 'households' ? ['contactNumber'] : []) {
+      if (raw[field] !== undefined && !validPhilippineContactNumber(raw[field])) {
+        this.fieldErrors[field] = 'Enter a valid Philippine mobile or landline number.';
+      }
+    }
+    if (Object.keys(this.fieldErrors).length) {
+      this.focusEditorField(form, Object.keys(this.fieldErrors)[0]!);
+      return;
+    }
+    if (this.currentResource === 'notifications') {
+      const notification = this.notificationPayload(form);
+      if (!notification) return;
+      Object.assign(raw, notification);
+    }
     if (this.activePage === 'reports' && !this.editorId) {
       const photos = formData.getAll('photos').filter((value): value is File => value instanceof File && value.size > 0);
       if (photos.length > 5) {
@@ -1390,8 +1486,67 @@ export class App implements OnInit, OnDestroy {
         }, 4_000);
         if (this.activePage === 'reports') this.refreshPendingReportCount();
       },
-      error: (error) => this.errorMessage = error?.error?.message ?? 'The record could not be saved.'
+      error: (error) => this.handleEditorError(error, form, 'The record could not be saved.')
     });
+  }
+
+  deleteFloodReport(reportId: string) {
+    if (this.activePage !== 'reports' || !reportId || this.api.user()?.role !== 'Super Admin' || this.loading) return;
+    const trackingCode = String(this.rawRecords.get(reportId)?.['tracking_code'] ?? reportId);
+    if (!window.confirm(`Permanently delete flood report ${trackingCode}? It will disappear from reports and maps. Linked advisories will remain.`)) return;
+    this.errorMessage = '';
+    this.successMessage = '';
+    this.loading = true;
+    this.api.delete('flood-reports', reportId).pipe(finalize(() => this.finishLoading())).subscribe({
+      next: () => {
+        this.selectedMapFocus = undefined;
+        this.selectedPublicIncident = undefined;
+        this.mapRefreshNonce++;
+        if (this.editorOpen && this.editorId === reportId) this.closeEditor();
+        this.successMessage = 'Flood report deleted successfully.';
+        this.loadResource();
+        this.loadPublicData();
+        this.refreshPendingReportCount();
+      },
+      error: (error) => this.errorMessage = error?.error?.message ?? 'The flood report could not be deleted.'
+    });
+  }
+
+  private notificationPayload(form: HTMLFormElement): Record<string, unknown> | null {
+    const values = new FormData(form);
+    const payload = {
+      title: String(values.get('title') ?? '').trim(),
+      message: String(values.get('message') ?? '').trim(),
+      type: String(values.get('type') ?? ''),
+      severityLevel: String(values.get('severityLevel') ?? ''),
+      targetAudience: String(values.get('targetAudience') ?? ''),
+      zoneIds: values.getAll('zoneIds').map(String)
+    };
+    this.fieldErrors = {};
+    for (const [name, label] of [['title', 'Title'], ['message', 'Message'], ['type', 'Type'], ['severityLevel', 'Severity'], ['targetAudience', 'Target audience']]) {
+      if (!payload[name as keyof typeof payload]) this.fieldErrors[name] = `${label} is required.`;
+    }
+    if (payload.targetAudience === 'Affected Zones' && !payload.zoneIds.length) this.fieldErrors['zoneIds'] = 'Select at least one affected zone.';
+    if (Object.keys(this.fieldErrors).length) {
+      this.focusEditorField(form, Object.keys(this.fieldErrors)[0]!);
+      return null;
+    }
+    if (payload.targetAudience !== 'Affected Zones') payload.zoneIds = [];
+    return payload;
+  }
+
+  private focusEditorField(form: HTMLFormElement, name: string) {
+    window.requestAnimationFrame(() => (form.elements.namedItem(name) as HTMLElement | null)?.focus());
+  }
+
+  private handleEditorError(error: any, form: HTMLFormElement, fallback: string) {
+    const fields = error?.error?.fieldErrors;
+    if (fields && typeof fields === 'object' && Object.keys(fields).length) {
+      this.fieldErrors = fields as Record<string, string>;
+      this.focusEditorField(form, Object.keys(this.fieldErrors)[0]!);
+    } else {
+      this.errorMessage = error?.error?.message ?? fallback;
+    }
   }
 
   private refreshPendingReportCount() {
@@ -1416,6 +1571,8 @@ export class App implements OnInit, OnDestroy {
     this.editorOpen = false;
     this.editorId = '';
     this.editorValues = {};
+    this.fieldErrors = {};
+    this.fieldErrors = {};
     this.errorMessage = '';
     this.changeDetector.detectChanges();
   }
@@ -1461,7 +1618,12 @@ export class App implements OnInit, OnDestroy {
   }
 
   reportLocation(row: { id: string }) {
-    return String(this.reportTableRecord(row)['location_text'] ?? 'Location not provided');
+    return this.displayLocation(this.reportTableRecord(row)['location_text'] ?? 'Location not provided');
+  }
+
+  displayLocation(value: unknown) {
+    const text = String(value ?? '').replace(/\s*\(-?\d{1,2}(?:\.\d+)?,\s*-?\d{1,3}(?:\.\d+)?\)/g, '').trim();
+    return text || 'Pinned map location';
   }
 
   reportCreatedTime(row: { id: string }) {
@@ -1526,17 +1688,23 @@ export class App implements OnInit, OnDestroy {
 
   notificationAction(action: 'send' | 'archive') {
     if (!this.editorId) return;
+    const form = document.querySelector<HTMLFormElement>('.editor-modal form');
+    if (!form) return;
     this.errorMessage = '';
     this.successMessage = '';
+    const payload = action === 'send' ? this.notificationPayload(form) : null;
+    if (action === 'send' && !payload) return;
     this.loading = true;
-    const request = action === 'send' ? this.api.sendNotification(this.editorId) : this.api.archiveNotification(this.editorId);
+    const request = action === 'send'
+      ? this.api.update('notifications', this.editorId, payload!).pipe(switchMap(() => this.api.sendNotification(this.editorId)))
+      : this.api.archiveNotification(this.editorId);
     request.pipe(finalize(() => this.finishLoading())).subscribe({
       next: () => {
         this.closeEditor();
         this.successMessage = `Notification ${action === 'send' ? 'sent' : 'archived'} successfully.`;
         this.setPage('notifications');
       },
-      error: (error) => this.errorMessage = error?.error?.message ?? `Notification could not be ${action === 'send' ? 'sent' : 'archived'}.`
+      error: (error) => this.handleEditorError(error, form, `Notification could not be ${action === 'send' ? 'sent' : 'archived'}.`)
     });
   }
 
@@ -1574,12 +1742,23 @@ export class App implements OnInit, OnDestroy {
     });
   }
 
+  generateSelectedUserTemporaryPassword() {
+    if (!this.editorId || this.loading) return;
+    this.errorMessage = '';
+    this.temporaryPassword = '';
+    this.loading = true;
+    this.api.generateTemporaryPassword(this.editorId).pipe(finalize(() => this.finishLoading())).subscribe({
+      next: ({ temporaryPassword }) => { this.temporaryPassword = temporaryPassword; },
+      error: (error) => this.errorMessage = error?.error?.message ?? 'Temporary password could not be generated.'
+    });
+  }
+
   private mapReport(row: Record<string, unknown>) {
     const severity = String(row['severity_level'] ?? row['severityLevel'] ?? 'Information');
     const status = String(row['status'] ?? 'Submitted');
     return {
       code: String(row['tracking_code'] ?? row['trackingCode'] ?? ''),
-      location: String(row['location_text'] ?? row['locationText'] ?? ''),
+      location: this.displayLocation(row['location_text'] ?? row['locationText']),
       description: String(row['description'] ?? ''),
       status,
       statusClass: status === 'Validated' ? 'validated' : status === 'Under Review' ? 'review' : 'submitted',
@@ -1609,9 +1788,9 @@ export class App implements OnInit, OnDestroy {
         ?? ''
       ),
       detail: row['report_id']
-        ? `${String(row['incident_type'] ?? 'Other')} · ${String(row['location_text'] ?? '')}`
+        ? `${String(row['incident_type'] ?? 'Other')} · ${this.displayLocation(row['location_text'])}`
         : row['shelter_id']
-          ? `${row['resident_occupancy'] ?? row['current_occupancy'] ?? 0}/${row['capacity'] ?? 0} residents · ${row['location_text'] ?? ''}`
+          ? `${row['resident_occupancy'] ?? row['current_occupancy'] ?? 0}/${row['capacity'] ?? 0} residents · ${this.displayLocation(row['location_text'])}`
           : row['volunteer_id']
             ? String(row['assigned_zone_id'] ? `Assigned zone: ${row['assigned_zone_id']}` : row['email'] ?? 'Unassigned')
             : row['route_id']
@@ -1620,7 +1799,7 @@ export class App implements OnInit, OnDestroy {
                 ? String(row['phone_number'] ?? row['email'] ?? '')
                 : row['resident_id']
                   ? `${row['household_number'] ?? 'No household'} · ${row['zone_name'] ?? 'No zone'} · ${row['household_address'] ?? row['address_line'] ?? 'No address'}`
-                  : String(row['email'] ?? row['address_line'] ?? row['message'] ?? row['location_text'] ?? values[2] ?? ''),
+                  : String(row['email'] ?? row['address_line'] ?? row['message'] ?? (row['location_text'] ? this.displayLocation(row['location_text']) : values[2]) ?? ''),
       status: String(row['record_status'] ?? row['verification_status'] ?? row['availability_status'] ?? row['status'] ?? row['risk_level'] ?? row['role'] ?? (row['is_active'] ? 'Active' : 'Inactive')),
       updated: this.formatDate(row['source_updated_at'] ?? row['updated_at'] ?? row['source_created_at'] ?? row['created_at'])
     };
