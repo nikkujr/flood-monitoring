@@ -427,13 +427,15 @@ app.get("/api/flood-reports/pending-count", requireAuth, requireRoles("Super Adm
 }));
 app.get("/api/flood-reports/:id", requireAuth, requireRoles("Super Admin", "Disaster Officer"), asyncRoute(async (req, res) => {
   const [rows] = await db.query<any[]>(
-    `SELECT fr.*,COALESCE(JSON_ARRAYAGG(frz.zone_id),JSON_ARRAY()) affected_zone_ids
-     FROM flood_reports fr LEFT JOIN flood_report_zones frz ON frz.report_id=fr.report_id
-     WHERE fr.report_id=? GROUP BY fr.report_id`,
+    "SELECT * FROM flood_reports WHERE report_id=? LIMIT 1",
     [String(req.params.id)]
   );
   if (!rows[0]) return res.status(404).json({ message: "Flood report not found" });
-  res.json(rows[0]);
+  const [zones] = await db.query<any[]>(
+    "SELECT zone_id FROM flood_report_zones WHERE report_id=? ORDER BY zone_id",
+    [String(req.params.id)]
+  );
+  res.json({ ...rows[0], affected_zone_ids: zones.map((zone) => zone.zone_id) });
 }));
 
 async function serveReportPhoto(reportId: string, indexValue: string, publicOnly: boolean, res: express.Response) {
