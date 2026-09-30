@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { readFile, unlink } from "node:fs/promises";
-import { extname, join, resolve, sep } from "node:path";
+import { extname, join, relative, resolve } from "node:path";
 import bcrypt from "bcryptjs";
 import cors from "cors";
 import express from "express";
@@ -11,6 +11,7 @@ import nodemailer from "nodemailer";
 import { z } from "zod";
 import { config } from "./config.js";
 import { db, healthcheck } from "./db.js";
+import { loadDss } from "./dss-api.js";
 import {
   createAccessToken,
   createRefreshToken,
@@ -23,7 +24,22 @@ import type { AuthRequest, AuthUser } from "./types.js";
 
 mkdirSync(config.uploadRoot, { recursive: true });
 const app = express();
-app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://maps.googleapis.com", "https://maps.gstatic.com"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:", "https://tile.openstreetmap.org", "https://*.tile.openstreetmap.org", "https://server.arcgisonline.com", "https://maps.gstatic.com", "https://*.google.com", "https://*.googleapis.com"],
+      connectSrc: ["'self'", "https://ulap-nga.georisk.gov.ph", "https://maps.googleapis.com"],
+      fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      frameAncestors: ["'self'"]
+    }
+  }
+}));
 app.use(cors({ origin: config.frontendOrigins, credentials: true }));
 app.use(express.json({ limit: "1mb" }));
 
@@ -53,7 +69,7 @@ async function paginated(
   res: express.Response,
   table: string,
   req: express.Request,
-  options: { columns?: string; where?: string; params?: unknown[]; searchColumns?: string[]; sortFields?: string[]; defaultSort?: string } = {}
+  options: { columns?: string; where?: string; params?: unknown[]; searchColumns?: string[]; sortFields?: string[]; defaultSort?: string; filterFields?: Record<string, { column?: string; sql?: string; exact?: boolean; present?: boolean; operator?: ">=" | "<=" }> } = {}
 ) {
   const { page, pageSize, offset } = pagination(req);
   const search = String(req.query.search ?? "").trim();
@@ -62,6 +78,20 @@ async function paginated(
   if (search && options.searchColumns?.length) {
     where += ` AND (${options.searchColumns.map((column) => `${column} LIKE ?`).join(" OR ")})`;
     params.push(...options.searchColumns.map(() => `%${search}%`));
+  }
+  for (const [name, filter] of Object.entries(options.filterFields ?? {})) {
+    const value = String(req.query[`filter_${name}`] ?? "").trim();
+    if (!value) continue;
+    const expression = filter.sql ?? filter.column;
+    if (!expression) continue;
+    if (filter.present) {
+      where += ` AND ${expression} IS NOT NULL AND TRIM(${expression})!=''`;
+      continue;
+    }
+    if (filter.sql) where += ` AND ${filter.sql}`;
+    else if (filter.operator) where += ` AND ${expression}${filter.operator}?`;
+    else where += filter.exact ? ` AND ${expression}=?` : ` AND ${expression} LIKE ?`;
+    params.push(filter.exact || filter.operator || filter.sql ? value : `%${value}%`);
   }
   const allowedSorts = options.sortFields ?? ["created_at"];
   const sortBy = String(req.query.sortBy ?? options.defaultSort ?? allowedSorts[0]);
@@ -82,7 +112,9 @@ app.get("/api/health", asyncRoute(async (_req, res) => {
   res.json({ status: "ok", service: "BantayBaha API" });
 }));
 
+// frontend
 app.post("/api/auth/login", asyncRoute(async (req, res) => {
+  // once receive the req, extract u and p (condition)
   const input = z.object({ username: z.string().min(1), password: z.string().min(1) }).parse(req.body);
   const [rows] = await db.execute<any[]>("SELECT * FROM users WHERE username=? AND is_active=1 LIMIT 1", [input.username]);
   const row = rows[0];
@@ -246,6 +278,29 @@ const uploads = multer({
   )
 });
 
+function pointInsideRing(latitude: number, longitude: number, ring: number[][]) {
+  let inside = false;
+  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index++) {
+    const [x = 0, y = 0] = ring[index] ?? [];
+    const [previousX = 0, previousY = 0] = ring[previous] ?? [];
+    if (((y > latitude) !== (previousY > latitude)) && longitude < (previousX - x) * (latitude - y) / (previousY - y) + x) inside = !inside;
+  }
+  return inside;
+}
+
+function pointInsideGeometry(latitude: number, longitude: number, value: unknown) {
+  try {
+    const geometry = typeof value === "string" ? JSON.parse(value) : value as any;
+    const polygons = geometry?.type === "Polygon" ? [geometry.coordinates] : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
+    return polygons.some((polygon: number[][][]) =>
+      pointInsideRing(latitude, longitude, polygon[0] ?? [])
+      && !polygon.slice(1).some((hole) => pointInsideRing(latitude, longitude, hole))
+    );
+  } catch {
+    return false;
+  }
+}
+
 app.post("/api/flood-reports", uploads.array("photos", 5), asyncRoute(async (req, res) => {
   const input = z.object({
     reporterName: z.string().optional(),
@@ -255,7 +310,7 @@ app.post("/api/flood-reports", uploads.array("photos", 5), asyncRoute(async (req
     severityLevel: z.enum(["Information", "Minor Incident", "Major Incident"]),
     latitude: z.coerce.number().min(-90).max(90),
     longitude: z.coerce.number().min(-180).max(180),
-    description: z.string().min(10)
+    description: z.string().trim().max(2000).optional().default("")
   }).parse(req.body);
   const uploadedFiles = ((req.files as Express.Multer.File[]) ?? []);
   for (const file of uploadedFiles) {
@@ -270,11 +325,28 @@ app.post("/api/flood-reports", uploads.array("photos", 5), asyncRoute(async (req
   const id = randomUUID();
   const trackingCode = `BB-${new Date().getFullYear()}-${id.slice(0, 8).toUpperCase()}`;
   const photos = uploadedFiles.map((file) => file.path.slice(config.uploadRoot.length).replaceAll("\\", "/"));
-  await db.execute(
-    "INSERT INTO flood_reports(report_id,tracking_code,reporter_name,reporter_contact_info,location_text,incident_type,latitude,longitude,description,photo_urls,severity_level) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-    [id, trackingCode, input.reporterName ?? null, input.reporterContactInfo ?? null, input.locationText, input.incidentType, input.latitude, input.longitude, input.description, JSON.stringify(photos), input.severityLevel]
-  );
-  res.status(201).json({ reportId: id, trackingCode, status: "Submitted" });
+  const [zones] = await db.query<any[]>("SELECT zone_id,zone_name,polygon_geojson FROM zones WHERE polygon_geojson IS NOT NULL");
+  const zone = zones.find((candidate) => pointInsideGeometry(input.latitude, input.longitude, candidate.polygon_geojson));
+  if (zones.length && !zone) {
+    await Promise.all(uploadedFiles.map((uploaded) => unlink(uploaded.path).catch(() => undefined)));
+    return res.status(400).json({ message: "The pinned location does not fall inside a configured barangay zone." });
+  }
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute(
+      "INSERT INTO flood_reports(report_id,tracking_code,reporter_name,reporter_contact_info,location_text,incident_type,latitude,longitude,description,photo_urls,severity_level) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+      [id, trackingCode, input.reporterName ?? null, input.reporterContactInfo ?? null, input.locationText, input.incidentType, input.latitude, input.longitude, input.description, JSON.stringify(photos), input.severityLevel]
+    );
+    if (zone) await connection.execute("INSERT INTO flood_report_zones(report_id,zone_id) VALUES(?,?)", [id, zone.zone_id]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  res.status(201).json({ reportId: id, trackingCode, status: "Submitted", zoneId: zone?.zone_id ?? null, zoneName: zone?.zone_name ?? null });
 }));
 
 app.get("/api/flood-reports/public", asyncRoute(async (req, res) => paginated(res, "flood_reports", req, {
@@ -285,7 +357,13 @@ app.get("/api/flood-reports/public", asyncRoute(async (req, res) => paginated(re
 })));
 app.get("/api/flood-reports", requireAuth, requireRoles("Super Admin", "Disaster Officer"), asyncRoute(async (req, res) => paginated(res, "flood_reports", req, {
   searchColumns: ["tracking_code", "reporter_name", "location_text", "description", "status"],
-  sortFields: ["created_at", "updated_at", "severity_level", "status", "location_text"]
+  sortFields: ["created_at", "updated_at", "severity_level", "status", "location_text"],
+  filterFields: {
+    zone: { sql: "EXISTS(SELECT 1 FROM flood_report_zones frz WHERE frz.report_id=flood_reports.report_id AND frz.zone_id=?)", exact: true },
+    severity: { column: "severity_level", exact: true }, status: { column: "status", exact: true },
+    incidentType: { column: "incident_type", exact: true }, dateFrom: { column: "created_at", operator: ">=" },
+    dateTo: { sql: "created_at<DATE_ADD(?, INTERVAL 1 DAY)", exact: true }
+  }
 })));
 app.get("/api/flood-reports/pending-count", requireAuth, requireRoles("Super Admin", "Disaster Officer"), asyncRoute(async (_req, res) => {
   const [rows] = await db.query<any[]>("SELECT COUNT(*) pendingCount FROM flood_reports WHERE status IN ('Submitted','Under Review')");
@@ -308,16 +386,29 @@ async function serveReportPhoto(reportId: string, indexValue: string, publicOnly
     [reportId]
   );
   if (!rows[0]) return res.status(404).json({ message: "Flood report not found" });
-  const photoUrls = typeof rows[0].photo_urls === "string" ? JSON.parse(rows[0].photo_urls) : rows[0].photo_urls;
-  const relativePath = Array.isArray(photoUrls) ? photoUrls[Number(indexValue)] : undefined;
-  if (!relativePath) return res.status(404).json({ message: "Photo not found" });
-  const absolutePath = resolve(config.uploadRoot, `.${String(relativePath)}`);
-  if (!absolutePath.startsWith(`${config.uploadRoot}${sep}`)) return res.status(400).json({ message: "Invalid photo path" });
+  const index = Number(indexValue);
+  if (!Number.isSafeInteger(index) || index < 0) return res.status(400).json({ message: "Invalid photo index" });
+  let photoUrls: unknown;
+  try {
+    photoUrls = typeof rows[0].photo_urls === "string" ? JSON.parse(rows[0].photo_urls) : rows[0].photo_urls;
+  } catch {
+    return res.status(404).json({ message: "Photo not found" });
+  }
+  const storedPath = Array.isArray(photoUrls) ? photoUrls[index] : undefined;
+  if (typeof storedPath !== "string" || !storedPath.trim()) return res.status(404).json({ message: "Photo not found" });
+  // Accept both legacy "/flood-reports/..." paths and newer relative paths.
+  const normalizedPath = storedPath.replace(/^[\\/]+/, "");
+  const absolutePath = resolve(config.uploadRoot, normalizedPath);
+  const pathFromUploadRoot = relative(config.uploadRoot, absolutePath);
+  if (!pathFromUploadRoot || pathFromUploadRoot.startsWith("..") || resolve(config.uploadRoot, pathFromUploadRoot) !== absolutePath) {
+    return res.status(400).json({ message: "Invalid photo path" });
+  }
   res.sendFile(absolutePath);
 }
 app.get("/api/flood-reports/public/:id/photos/:index", asyncRoute(async (req, res) =>
   serveReportPhoto(String(req.params.id), String(req.params.index), true, res)
 ));
+
 app.get("/api/flood-reports/:id/photos/:index", requireAuth, requireRoles("Super Admin", "Disaster Officer"), asyncRoute(async (req, res) =>
   serveReportPhoto(String(req.params.id), String(req.params.index), false, res)
 ));
@@ -325,7 +416,7 @@ app.put("/api/flood-reports/:id/status", requireAuth, requireRoles("Super Admin"
   const input = z.object({
     status: z.enum(["Under Review", "Validated", "Rejected", "Resolved"]),
     severityLevel: z.enum(["Information", "Minor Incident", "Major Incident"]),
-    validationNotes: z.string().min(3),
+    validationNotes: z.string().trim().max(2000).optional().default(""),
     zoneIds: z.array(z.string().uuid()).min(1, "Select at least one affected Barangay Zone")
   }).parse(req.body);
   const uniqueZoneIds = [...new Set(input.zoneIds)];
@@ -352,14 +443,26 @@ app.put("/api/flood-reports/:id/status", requireAuth, requireRoles("Super Admin"
 
 app.get("/api/map/live", asyncRoute(async (_req, res) => {
   const [[zones], [riskZones], [shelters], [reports], [routes]] = await Promise.all([
-    db.query("SELECT * FROM zones"),
+    db.query(`SELECT z.*,
+      COUNT(DISTINCT fr.report_id) active_report_count,
+      CASE
+        WHEN COUNT(DISTINCT fr.report_id)>=5 THEN 'Critical'
+        WHEN COUNT(DISTINCT fr.report_id)>=3 OR SUM(fr.severity_level='Major Incident')>0 THEN 'High'
+        WHEN COUNT(DISTINCT fr.report_id)>0 THEN 'Moderate'
+        ELSE 'Low'
+      END assessed_risk_level
+      FROM zones z
+      LEFT JOIN flood_report_zones frz ON frz.zone_id=z.zone_id
+      LEFT JOIN flood_reports fr ON fr.report_id=frz.report_id AND fr.status='Validated'
+      GROUP BY z.zone_id`),
     db.query("SELECT * FROM risk_zones"),
-    db.query("SELECT * FROM shelters WHERE status!='Unavailable'"),
+    db.query(`SELECT s.*,(SELECT COUNT(*) FROM residents r WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active') current_occupancy
+      FROM shelters s WHERE s.status!='Unavailable' AND s.record_status='Active'`),
     db.query(`SELECT report_id,tracking_code,location_text,incident_type,latitude,longitude,description,photo_urls,severity_level,status,validated_at,created_at
               FROM flood_reports WHERE status='Validated'`),
     db.query("SELECT * FROM evacuation_routes WHERE status!='Closed'")
   ]);
-  res.json({ center: { latitude: 13.7795, longitude: 122.8708 }, zones, riskZones, shelters, reports, routes, refreshedAt: new Date().toISOString() });
+  res.json({ center: { latitude: 13.7828976, longitude: 122.8852784 }, zones, riskZones, shelters, reports, routes, refreshedAt: new Date().toISOString() });
 }));
 
 app.get("/api/emergency-contacts/public", asyncRoute(async (_req, res) => {
@@ -380,12 +483,13 @@ type ResourceConfig = {
   jsonFields?: string[];
   searchColumns: string[];
   sortFields: string[];
+  filterFields?: Record<string, { column?: string; sql?: string; exact?: boolean; present?: boolean; operator?: ">=" | "<=" }>;
 };
 
 const resources: Record<string, ResourceConfig> = {
   "barangay-zones": {
     table: "zones", idColumn: "zone_id", readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin"],
-    fields: { zoneName: "zone_name", polygonGeoJson: "polygon_geojson", description: "description" },
+    fields: { zoneName: "zone_name", zoneColor: "zone_color", polygonGeoJson: "polygon_geojson", description: "description" },
     required: ["zoneName", "polygonGeoJson"], jsonFields: ["polygonGeoJson"],
     searchColumns: ["zone_name", "description"], sortFields: ["zone_name", "created_at", "updated_at"]
   },
@@ -398,6 +502,10 @@ const resources: Record<string, ResourceConfig> = {
   households: {
     table: "households h", idColumn: "household_id",
     columns: `h.*,
+      CONCAT(
+        LPAD(CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(h.household_number,'-',1),'Z',-1) AS UNSIGNED),10,'0'),
+        LPAD(CAST(SUBSTRING_INDEX(h.household_number,'-',-1) AS UNSIGNED),10,'0')
+      ) household_sort_key,
       (SELECT COUNT(*) FROM residents r WHERE r.household_id=h.household_id) member_count,
       (SELECT z.risk_level FROM zones z WHERE z.zone_id=h.zone_id) risk_level,
       CASE
@@ -409,19 +517,21 @@ const resources: Record<string, ResourceConfig> = {
     readRoles: ["Super Admin", "Data Encoder"], writeRoles: ["Super Admin", "Data Encoder"],
     fields: { householdNumber: "household_number", zoneId: "zone_id", addressLine: "address_line", headOfHouseholdName: "head_of_household_name", contactNumber: "contact_number", verificationStatus: "verification_status" },
     required: ["householdNumber", "zoneId", "addressLine", "headOfHouseholdName"],
-    searchColumns: ["h.household_number", "h.address_line", "h.head_of_household_name", "h.verification_status"], sortFields: ["household_number", "address_line", "verification_status", "created_at", "updated_at"]
+    searchColumns: ["h.household_number", "h.address_line", "h.head_of_household_name", "h.verification_status"], sortFields: ["household_number", "household_sort_key", "address_line", "verification_status", "created_at", "updated_at"],
+    filterFields: { zone: { column: "h.zone_id", exact: true } }
   },
   residents: {
-    table: "residents r", idColumn: "resident_id", columns: "r.*,TIMESTAMPDIFF(YEAR,r.date_of_birth,CURDATE()) age",
-    readRoles: ["Super Admin", "Data Encoder"], writeRoles: ["Super Admin", "Data Encoder"],
-    fields: { householdId: "household_id", fullName: "full_name", dateOfBirth: "date_of_birth", sex: "sex", contactNumber: "contact_number", addressLine: "address_line", vulnerabilityType: "vulnerability_type", emergencyContactName: "emergency_contact_name", emergencyContactNumber: "emergency_contact_number", priorityLevel: "priority_level", evacuationStatus: "evacuation_status" },
-    required: ["householdId", "fullName", "dateOfBirth", "sex", "addressLine", "priorityLevel", "evacuationStatus"],
-    searchColumns: ["r.full_name", "r.address_line", "r.vulnerability_type"], sortFields: ["r.full_name", "r.date_of_birth", "r.priority_level", "r.evacuation_status", "r.created_at", "r.updated_at"]
+    table: "residents r", idColumn: "resident_id", columns: "r.*,TIMESTAMPDIFF(YEAR,r.date_of_birth,CURDATE()) age,(SELECT s.shelter_name FROM shelters s WHERE s.shelter_id=r.evacuation_shelter_id) evacuation_shelter_name,(SELECT h.household_number FROM households h WHERE h.household_id=r.household_id) household_number,(SELECT h.zone_id FROM households h WHERE h.household_id=r.household_id) zone_id,(SELECT z.zone_name FROM households h JOIN zones z ON z.zone_id=h.zone_id WHERE h.household_id=r.household_id) zone_name",
+    readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin", "Disaster Officer", "Data Encoder"],
+    fields: { householdId: "household_id", fullName: "full_name", dateOfBirth: "date_of_birth", sex: "sex", contactNumber: "contact_number", addressLine: "address_line", vulnerabilityType: "vulnerability_type", vulnerabilityOther: "vulnerability_other", relationshipToHead: "relationship_to_head", relationshipOther: "relationship_other", maritalStatus: "marital_status", outOfSchoolYouth: "out_of_school_youth", occupation: "occupation", education: "education", philsysNumber: "philsys_number", philhealthNumber: "philhealth_number", fpUse: "fp_use", unmetNeeds: "unmet_needs", pwdSpecify: "pwd_specify", soloParent: "solo_parent", morbidity: "morbidity", waterSourceLevel: "water_source_level", sanitaryToilet: "sanitary_toilet", canSwim: "can_swim", houseType: "house_type", emergencyContactName: "emergency_contact_name", emergencyContactNumber: "emergency_contact_number", priorityLevel: "priority_level", evacuationStatus: "evacuation_status", recordStatus: "record_status", evacuationShelterId: "evacuation_shelter_id" },
+    required: ["householdId", "fullName", "dateOfBirth", "sex", "addressLine", "priorityLevel"],
+    searchColumns: ["r.full_name", "r.address_line", "r.vulnerability_type", "r.contact_number", "(SELECT h.household_number FROM households h WHERE h.household_id=r.household_id)"], sortFields: ["r.full_name", "r.date_of_birth", "r.priority_level", "r.evacuation_status", "r.created_at", "r.updated_at"],
+    filterFields: { zone: { sql: "EXISTS(SELECT 1 FROM households h WHERE h.household_id=r.household_id AND h.zone_id=?)", exact: true }, household: { column: "r.household_id", exact: true }, vulnerability: { column: "r.vulnerability_type", exact: true }, vulnerable: { column: "r.vulnerability_type", present: true }, status: { column: "r.evacuation_status", exact: true }, priority: { column: "r.priority_level", exact: true }, shelter: { column: "r.evacuation_shelter_id", exact: true } }
   },
   shelters: {
-    table: "shelters", idColumn: "shelter_id", readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin", "Disaster Officer", "Data Encoder"],
-    fields: { shelterName: "shelter_name", zoneId: "zone_id", locationText: "location_text", latitude: "latitude", longitude: "longitude", capacity: "capacity", currentOccupancy: "current_occupancy", contactPerson: "contact_person", contactNumber: "contact_number", email: "email", status: "status" },
-    required: ["shelterName", "zoneId", "locationText", "latitude", "longitude", "capacity", "currentOccupancy", "contactPerson", "contactNumber", "status"],
+    table: "shelters s", idColumn: "shelter_id", columns: "s.*,(SELECT COUNT(*) FROM residents r WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active') resident_occupancy", readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin", "Disaster Officer", "Data Encoder"],
+    fields: { shelterName: "shelter_name", zoneId: "zone_id", locationText: "location_text", latitude: "latitude", longitude: "longitude", capacity: "capacity", currentOccupancy: "current_occupancy", contactPerson: "contact_person", contactNumber: "contact_number", email: "email", status: "status", recordStatus: "record_status" },
+    required: ["shelterName", "zoneId", "locationText", "latitude", "longitude", "capacity", "contactPerson", "contactNumber", "status"],
     searchColumns: ["shelter_name", "location_text", "contact_person"], sortFields: ["shelter_name", "capacity", "current_occupancy", "status", "created_at", "updated_at"]
   },
   volunteers: {
@@ -469,11 +579,32 @@ async function validateResource(path: string, body: Record<string, any>, recordI
     if (!matches[0]) throw new z.ZodError([{ code: "custom", path: [reference.field], message: `Select an existing ${reference.label}` }]);
   }
   if (path === "residents") {
+    for (const [field, allowed] of Object.entries({ canSwim: ["Yes", "No"], houseType: ["Concrete", "Semi concrete", "Light materials"] })) {
+      const value = body[field];
+      if (value !== undefined && value !== null && value !== "" && !allowed.includes(value)) {
+        throw new z.ZodError([{ code: "custom", path: [field], message: `Select a valid ${field === "canSwim" ? "swimming ability" : "house type"}` }]);
+      }
+    }
     if (body.dateOfBirth && new Date(body.dateOfBirth) > new Date()) throw new z.ZodError([{ code: "custom", path: ["dateOfBirth"], message: "Date of birth cannot be in the future" }]);
     if (body.householdId) {
       const [households] = await db.query<any[]>("SELECT household_id FROM households WHERE household_id=? LIMIT 1", [body.householdId]);
       if (!households[0]) {
         throw new z.ZodError([{ code: "custom", path: ["householdId"], message: "Select an existing household" }]);
+      }
+    }
+    if (body.recordStatus !== undefined && !["Active", "Inactive"].includes(String(body.recordStatus))) {
+      throw new z.ZodError([{ code: "custom", path: ["recordStatus"], message: "Select a valid resident status" }]);
+    }
+    if (body.evacuationStatus === "Evacuated" && !body.evacuationShelterId) {
+      throw new z.ZodError([{ code: "custom", path: ["evacuationShelterId"], message: "Select the evacuation center where the resident is staying" }]);
+    }
+    if (body.evacuationShelterId) {
+      const [shelters] = await db.query<any[]>(`SELECT s.shelter_id,s.capacity,
+        (SELECT COUNT(*) FROM residents r WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active' AND (? IS NULL OR r.resident_id!=?)) resident_occupancy
+        FROM shelters s WHERE s.shelter_id=? AND s.record_status='Active' LIMIT 1`, [recordId ?? null, recordId ?? null, body.evacuationShelterId]);
+      if (!shelters[0]) throw new z.ZodError([{ code: "custom", path: ["evacuationShelterId"], message: "Select an active evacuation center" }]);
+      if (body.evacuationStatus === "Evacuated" && Number(shelters[0].resident_occupancy) >= Number(shelters[0].capacity)) {
+        throw new z.ZodError([{ code: "custom", path: ["evacuationShelterId"], message: "The selected evacuation center is already at full capacity" }]);
       }
     }
     for (const field of ["contactNumber", "emergencyContactNumber"]) {
@@ -487,11 +618,22 @@ async function validateResource(path: string, body: Record<string, any>, recordI
       if (duplicates[0]) throw Object.assign(new Error("Duplicate resident record"), { code: "ER_DUP_ENTRY" });
     }
   }
-  if (path === "households" && body.verificationStatus !== undefined) {
-    const validStatuses = ["Pending Verification", "Verified", "Rejected"];
-    if (!validStatuses.includes(String(body.verificationStatus))) {
-      throw new z.ZodError([{ code: "custom", path: ["verificationStatus"], message: "Select a valid household verification status" }]);
+  if (path === "households") {
+    if (body.householdNumber !== undefined) {
+      const householdNumber = String(body.householdNumber).trim();
+      if (!/^Z[1-9]\d*-\d+$/.test(householdNumber)) {
+        throw new z.ZodError([{ code: "custom", path: ["householdNumber"], message: "Household number must use the format Z1-1, Z2-1, etc." }]);
+      }
     }
+    if (body.verificationStatus !== undefined) {
+      const validStatuses = ["Pending Verification", "Verified", "Rejected"];
+      if (!validStatuses.includes(String(body.verificationStatus))) {
+        throw new z.ZodError([{ code: "custom", path: ["verificationStatus"], message: "Select a valid household verification status" }]);
+      }
+    }
+  }
+  if (path === "barangay-zones" && body.zoneColor !== undefined && !/^#[0-9a-f]{6}$/i.test(String(body.zoneColor))) {
+    throw new z.ZodError([{ code: "custom", path: ["zoneColor"], message: "Boundary color must be a valid hex color" }]);
   }
   if (["barangay-zones", "risk-zones"].includes(path) && body.polygonGeoJson && body.polygonGeoJson.type !== "Polygon" && body.polygonGeoJson.type !== "MultiPolygon") {
     throw new z.ZodError([{ code: "custom", path: ["polygonGeoJson"], message: "Zone geometry must be a GeoJSON Polygon or MultiPolygon" }]);
@@ -502,6 +644,9 @@ async function validateResource(path: string, body: Record<string, any>, recordI
   if (path === "shelters") {
     for (const field of ["capacity", "currentOccupancy"]) if (body[field] !== undefined && (!Number.isInteger(Number(body[field])) || Number(body[field]) < 0)) {
       throw new z.ZodError([{ code: "custom", path: [field], message: `${field} must be a non-negative whole number` }]);
+    }
+    if (body.recordStatus !== undefined && !["Active", "Inactive"].includes(String(body.recordStatus))) {
+      throw new z.ZodError([{ code: "custom", path: ["recordStatus"], message: "Select a valid evacuation center status" }]);
     }
   }
   const phoneFields: Partial<Record<string, string[]>> = {
@@ -515,11 +660,232 @@ async function validateResource(path: string, body: Record<string, any>, recordI
     }
   }
 }
+
+async function syncShelterOccupancy(connection: any, shelterIds: Array<string | null | undefined>) {
+  for (const shelterId of [...new Set(shelterIds.filter(Boolean) as string[])]) {
+    await connection.execute(
+      `UPDATE shelters s SET current_occupancy=(SELECT COUNT(*) FROM residents r
+       WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active'),
+       status=CASE
+         WHEN s.record_status='Inactive' OR s.status='Unavailable' THEN 'Unavailable'
+         WHEN (SELECT COUNT(*) FROM residents r WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active') >= s.capacity THEN 'Full'
+         WHEN (SELECT COUNT(*) FROM residents r WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active') >= CEIL(s.capacity * 0.8) THEN 'Near Capacity'
+         ELSE 'Available' END
+       WHERE s.shelter_id=?`,
+      [shelterId]
+    );
+  }
+}
+
+function mysqlDateTime(date: Date) {
+  return date.toISOString().slice(0, 19).replace("T", " ");
+}
+
+app.post("/api/shelters/:id/assignments", requireAuth, requireRoles("Super Admin", "Disaster Officer", "Data Encoder"), asyncRoute(async (req: AuthRequest, res) => {
+  const input = z.object({
+    residentIds: z.array(z.string().uuid()).min(1).max(100).transform((ids) => [...new Set(ids)]),
+    evacuationAt: z.coerce.date()
+  }).parse(req.body);
+  const shelterId = String(req.params.id);
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [shelters] = await connection.query<any[]>("SELECT shelter_id,capacity,status,record_status FROM shelters WHERE shelter_id=? FOR UPDATE", [shelterId]);
+    const shelter = shelters[0];
+    if (!shelter || shelter.record_status !== "Active" || shelter.status === "Unavailable") {
+      await connection.rollback();
+      return res.status(409).json({ message: "The selected evacuation center is unavailable" });
+    }
+    const [residents] = await connection.query<any[]>(
+      "SELECT resident_id,evacuation_shelter_id,evacuation_status,record_status FROM residents WHERE resident_id IN (?) FOR UPDATE",
+      [input.residentIds]
+    );
+    if (residents.length !== input.residentIds.length || residents.some((resident) => resident.record_status !== "Active")) {
+      await connection.rollback();
+      return res.status(400).json({ message: "One or more selected residents are unavailable" });
+    }
+    const duplicate = residents.find((resident) => resident.evacuation_status === "Evacuated" && resident.evacuation_shelter_id === shelterId);
+    if (duplicate) {
+      await connection.rollback();
+      return res.status(409).json({ message: "A selected resident is already assigned to this evacuation center" });
+    }
+    const [occupancyRows] = await connection.query<any[]>(
+      "SELECT COUNT(*) occupancy FROM residents WHERE evacuation_shelter_id=? AND evacuation_status='Evacuated' AND record_status='Active'",
+      [shelterId]
+    );
+    if (Number(occupancyRows[0]?.occupancy ?? 0) + residents.length > Number(shelter.capacity)) {
+      await connection.rollback();
+      return res.status(409).json({ message: "Not enough remaining capacity for the selected residents" });
+    }
+    const affectedShelters = residents.map((resident) => resident.evacuation_shelter_id);
+    for (const resident of residents) {
+      const action = resident.evacuation_status === "Evacuated" && resident.evacuation_shelter_id ? "Transferred" : "Assigned";
+      await connection.execute("UPDATE residents SET evacuation_shelter_id=?,evacuation_status='Evacuated' WHERE resident_id=?", [shelterId, resident.resident_id]);
+      await connection.execute(
+        "INSERT INTO evacuation_assignments(assignment_id,resident_id,shelter_id,action,evacuation_at,recorded_by_user_id) VALUES(?,?,?,?,?,?)",
+        [randomUUID(), resident.resident_id, shelterId, action, mysqlDateTime(input.evacuationAt), req.user!.userId]
+      );
+    }
+    await syncShelterOccupancy(connection, [...affectedShelters, shelterId]);
+    await connection.commit();
+    res.json({ message: `${residents.length} resident${residents.length === 1 ? "" : "s"} assigned successfully`, assignedCount: residents.length });
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}));
+
+app.post("/api/residents/:id/return-home", requireAuth, requireRoles("Super Admin", "Disaster Officer", "Data Encoder"), asyncRoute(async (req: AuthRequest, res) => {
+  const input = z.object({ returnedAt: z.coerce.date() }).parse(req.body);
+  const residentId = String(req.params.id);
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.query<any[]>("SELECT resident_id,evacuation_shelter_id,evacuation_status FROM residents WHERE resident_id=? FOR UPDATE", [residentId]);
+    const resident = rows[0];
+    if (!resident) { await connection.rollback(); return res.status(404).json({ message: "Resident not found" }); }
+    if (resident.evacuation_status !== "Evacuated" || !resident.evacuation_shelter_id) { await connection.rollback(); return res.status(409).json({ message: "Resident is not currently assigned to an evacuation center" }); }
+    await connection.execute("UPDATE residents SET evacuation_shelter_id=NULL,evacuation_status='Safe' WHERE resident_id=?", [residentId]);
+    await connection.execute(
+      "INSERT INTO evacuation_assignments(assignment_id,resident_id,shelter_id,action,evacuation_at,recorded_by_user_id) VALUES(?,?,?,?,?,?)",
+      [randomUUID(), residentId, resident.evacuation_shelter_id, "Returned Home", mysqlDateTime(input.returnedAt), req.user!.userId]
+    );
+    await syncShelterOccupancy(connection, [resident.evacuation_shelter_id]);
+    await connection.commit();
+    res.json({ message: "Resident marked as Returned Home" });
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}));
+
+const residentSnapshotColumns = [
+  "resident_id", "household_id", "full_name", "date_of_birth", "sex", "contact_number", "address_line",
+  "vulnerability_type", "vulnerability_other", "relationship_to_head", "relationship_other", "marital_status",
+  "out_of_school_youth", "occupation", "education", "philsys_number", "philhealth_number", "fp_use",
+  "unmet_needs", "pwd_specify", "solo_parent", "morbidity", "water_source_level", "sanitary_toilet",
+  "can_swim", "house_type", "emergency_contact_name", "emergency_contact_number", "priority_level",
+  "evacuation_status", "record_status", "evacuation_shelter_id"
+];
+
+function currentResidentSnapshotYear() {
+  return Number(new Intl.DateTimeFormat("en", { timeZone: "Asia/Manila", year: "numeric" }).format(new Date()));
+}
+
+async function refreshCurrentResidentSnapshot() {
+  const year = currentResidentSnapshotYear();
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute("DELETE FROM resident_year_snapshots WHERE snapshot_year=?", [year]);
+    await connection.execute("DELETE FROM household_year_snapshots WHERE snapshot_year=?", [year]);
+    await connection.execute(
+      `INSERT INTO household_year_snapshots (
+        snapshot_year,household_id,household_number,zone_id,zone_name,address_line,
+        head_of_household_name,contact_number,verification_status,captured_at
+      ) SELECT ?,h.household_id,h.household_number,h.zone_id,z.zone_name,h.address_line,
+        h.head_of_household_name,h.contact_number,h.verification_status,NOW()
+        FROM households h JOIN zones z ON z.zone_id=h.zone_id`, [year]
+    );
+    await connection.execute(
+      `INSERT INTO resident_year_snapshots (
+        snapshot_year,resident_id,household_id,household_number,zone_id,zone_name,household_address,
+        head_of_household_name,${residentSnapshotColumns.slice(2).join(",")},source_created_at,source_updated_at,captured_at
+      ) SELECT ?,r.resident_id,r.household_id,h.household_number,h.zone_id,z.zone_name,h.address_line,
+        h.head_of_household_name,${residentSnapshotColumns.slice(2).map(column => `r.${column}`).join(",")},r.created_at,r.updated_at,NOW()
+        FROM residents r JOIN households h ON h.household_id=r.household_id JOIN zones z ON z.zone_id=h.zone_id`, [year]
+    );
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  return year;
+}
+
+app.get("/api/residents/yearly", requireAuth, requireRoles("Super Admin", "Disaster Officer", "Data Encoder"), asyncRoute(async (req, res) => {
+  const currentYear = currentResidentSnapshotYear();
+  const requestedYear = Number(req.query.year ?? currentYear);
+  if (!Number.isInteger(requestedYear) || requestedYear < 2000 || requestedYear > currentYear) {
+    return res.status(400).json({ message: `Year must be between 2000 and ${currentYear}` });
+  }
+  if (requestedYear === currentYear) await refreshCurrentResidentSnapshot();
+
+  const { page, pageSize, offset } = pagination(req);
+  const search = String(req.query.search ?? "").trim();
+  const params: unknown[] = [requestedYear];
+  let where = "r.snapshot_year=?";
+  if (search) {
+    where += " AND (r.full_name LIKE ? OR r.address_line LIKE ? OR r.vulnerability_type LIKE ? OR r.contact_number LIKE ? OR r.household_number LIKE ?)";
+    params.push(...Array(5).fill(`%${search}%`));
+  }
+  const exactFilters: Record<string, string> = {
+    zone: "r.zone_id", household: "r.household_id", vulnerability: "r.vulnerability_type",
+    status: "r.evacuation_status", priority: "r.priority_level"
+  };
+  for (const [name, column] of Object.entries(exactFilters)) {
+    const value = String(req.query[`filter_${name}`] ?? "").trim();
+    if (!value) continue;
+    where += ` AND ${column}=?`;
+    params.push(value);
+  }
+  if (String(req.query.filter_vulnerable ?? "") === "true") {
+    where += ` AND (r.vulnerability_type IS NOT NULL AND TRIM(r.vulnerability_type)!=''
+      OR r.pwd_specify IS NOT NULL AND TRIM(r.pwd_specify) NOT IN ('','NO','N/A')
+      OR r.morbidity IS NOT NULL AND TRIM(r.morbidity) NOT IN ('','NO','N/A')
+      OR TIMESTAMPDIFF(YEAR,r.date_of_birth,r.captured_at) NOT BETWEEN 18 AND 59)`;
+  }
+  const sortMap: Record<string, string> = {
+    "r.full_name": "r.full_name", "r.date_of_birth": "r.date_of_birth", "r.priority_level": "r.priority_level",
+    "r.evacuation_status": "r.evacuation_status", "r.created_at": "r.source_created_at", "r.updated_at": "r.source_updated_at"
+  };
+  const sortBy = String(req.query.sortBy ?? "r.full_name");
+  const sortColumn = sortMap[sortBy];
+  const sortOrder = String(req.query.sortOrder ?? "asc").toLowerCase();
+  if (!sortColumn) return res.status(400).json({ message: "Unsupported sortBy field" });
+  if (!['asc', 'desc'].includes(sortOrder)) return res.status(400).json({ message: "sortOrder must be asc or desc" });
+
+  const [items] = await db.query<any[]>(
+    `SELECT r.*,TIMESTAMPDIFF(YEAR,r.date_of_birth,r.captured_at) age,
+      (SELECT s.shelter_name FROM shelters s WHERE s.shelter_id=r.evacuation_shelter_id) evacuation_shelter_name
+      FROM resident_year_snapshots r WHERE ${where} ORDER BY ${sortColumn} ${sortOrder.toUpperCase()} LIMIT ? OFFSET ?`,
+    [...params, pageSize, offset]
+  );
+  const [countRows] = await db.query<any[]>(`SELECT COUNT(*) total FROM resident_year_snapshots r WHERE ${where}`, params);
+  const [summaryRows] = await db.query<any[]>(
+    `SELECT COUNT(*) totalResidents,COUNT(DISTINCT household_id) totalHouseholds,
+      SUM(priority_level='High') highPriorityResidents,
+      SUM(TIMESTAMPDIFF(YEAR,date_of_birth,captured_at)>=60) seniorCitizens,
+      SUM(TIMESTAMPDIFF(YEAR,date_of_birth,captured_at)<18) children,
+      SUM(vulnerability_type IN ('Disability','PWD','Person with Disability') OR (pwd_specify IS NOT NULL AND TRIM(pwd_specify) NOT IN ('','NO','N/A'))) personsWithDisability,
+      SUM(vulnerability_type='Pregnant') pregnantResidents,
+      SUM(morbidity IS NOT NULL AND TRIM(morbidity) NOT IN ('','NO','N/A')) residentsWithMorbidity,
+      SUM(vulnerability_type IS NOT NULL AND TRIM(vulnerability_type)!='' OR
+        pwd_specify IS NOT NULL AND TRIM(pwd_specify) NOT IN ('','NO','N/A') OR
+        morbidity IS NOT NULL AND TRIM(morbidity) NOT IN ('','NO','N/A') OR
+        TIMESTAMPDIFF(YEAR,date_of_birth,captured_at) NOT BETWEEN 18 AND 59) vulnerableResidents
+      FROM resident_year_snapshots WHERE snapshot_year=?`, [requestedYear]
+  );
+  const [yearRows] = await db.query<any[]>("SELECT DISTINCT snapshot_year year FROM resident_year_snapshots ORDER BY snapshot_year DESC");
+  const recentYears = Array.from({ length: 6 }, (_, index) => currentYear - index);
+  const availableYears = [...new Set([...recentYears, ...yearRows.map(row => Number(row.year))])].sort((a, b) => b - a);
+  const totalItems = Number(countRows[0]?.total ?? 0);
+  const summary = Object.fromEntries(Object.entries(summaryRows[0] ?? {}).map(([key, value]) => [key, Number(value ?? 0)]));
+  res.json({ items, page, pageSize, totalItems, totalPages: Math.ceil(totalItems / pageSize), year: requestedYear, currentYear, availableYears, summary });
+}));
+
 for (const [path, resource] of Object.entries(resources)) {
   app.get(`/api/${path}`, requireAuth, requireRoles(...resource.readRoles), asyncRoute(async (req, res) => paginated(res, resource.table, req, {
     columns: resource.columns,
     searchColumns: resource.searchColumns,
-    sortFields: resource.sortFields
+    sortFields: resource.sortFields,
+    filterFields: resource.filterFields
   })));
   app.get(`/api/${path}/:id`, requireAuth, requireRoles(...resource.readRoles), asyncRoute(async (req, res) => {
     const [rows] = await db.query<any[]>(
@@ -569,17 +935,17 @@ for (const [path, resource] of Object.entries(resources)) {
   }));
 }
 
-for (const path of ["shelters", "volunteers", "evacuation-routes", "emergency-contacts"]) {
+for (const path of ["residents", "shelters", "volunteers", "evacuation-routes", "emergency-contacts"]) {
   const resource = resources[path]!;
   app.delete(`/api/${path}/:id`, requireAuth, requireRoles(...resource.writeRoles), asyncRoute(async (req, res) => {
     const recordId = String(req.params.id);
     if (path === "shelters") {
       const [references] = await db.query<any[]>(
-        "SELECT COUNT(*) reference_count FROM evacuation_routes WHERE destination_shelter_id=?",
-        [recordId]
+        "SELECT (SELECT COUNT(*) FROM evacuation_routes WHERE destination_shelter_id=?) + (SELECT COUNT(*) FROM residents WHERE evacuation_shelter_id=?) reference_count",
+        [recordId, recordId]
       );
       if (Number(references[0]?.reference_count ?? 0) > 0) {
-        return res.status(409).json({ message: "This shelter cannot be deleted while evacuation routes reference it" });
+        return res.status(409).json({ message: "This shelter cannot be deleted while evacuation routes or resident assignments reference it" });
       }
     }
     const [result] = await db.execute<any>(
@@ -618,10 +984,17 @@ app.delete("/api/risk-zones/:id", requireAuth, requireRoles("Super Admin"), asyn
 
 app.get("/api/dashboard/summary", requireAuth, asyncRoute(async (_req, res) => {
   const [rows] = await db.query<any[]>(`SELECT
-    (SELECT COUNT(*) FROM residents) totalResidents,
+    (SELECT COUNT(*) FROM residents WHERE record_status='Active') totalResidents,
     (SELECT COUNT(*) FROM households) totalHouseholds,
-    (SELECT COUNT(*) FROM residents WHERE vulnerability_type IS NOT NULL) vulnerableResidents,
-    (SELECT COUNT(*) FROM residents WHERE priority_level='High') highPriorityResidents,
+    (SELECT COUNT(*) FROM residents WHERE record_status='Active' AND (
+      vulnerability_type IS NOT NULL AND TRIM(vulnerability_type)!='' OR
+      pwd_specify IS NOT NULL AND UPPER(TRIM(pwd_specify)) NOT IN ('','NO','N/A') OR
+      morbidity IS NOT NULL AND UPPER(TRIM(morbidity)) NOT IN ('','NO','N/A') OR
+      TIMESTAMPDIFF(YEAR,date_of_birth,CURDATE()) NOT BETWEEN 18 AND 59
+    )) vulnerableResidents,
+    (SELECT COUNT(*) FROM residents WHERE record_status='Active' AND UPPER(TRIM(priority_level))='HIGH') highPriorityResidents,
+    (SELECT COUNT(*) FROM residents WHERE record_status='Active' AND UPPER(TRIM(priority_level))='MEDIUM') mediumPriorityResidents,
+    (SELECT COUNT(*) FROM residents WHERE record_status='Active' AND UPPER(TRIM(priority_level))='LOW') lowPriorityResidents,
     (SELECT COUNT(*) FROM zones) totalZones,
     (SELECT COUNT(*) FROM flood_reports WHERE status IN ('Submitted','Under Review','Validated')) activeReports,
     (SELECT COUNT(*) FROM flood_reports WHERE status IN ('Submitted','Under Review')) pendingReports`);
@@ -637,6 +1010,17 @@ app.get("/api/dashboard/recent-reports", requireAuth, asyncRoute(async (_req, re
 }));
 
 app.get("/api/dashboard/alert", requireAuth, asyncRoute(async (_req, res) => {
+  const [zoneAlerts] = await db.query<any[]>(`
+    SELECT NULL report_id,NULL tracking_code,z.zone_name location_text,
+      CASE WHEN COUNT(DISTINCT fr.report_id)>=5 THEN 'Rule-based Critical Risk' ELSE 'Rule-based High Risk' END incident_type,
+      CONCAT(COUNT(DISTINCT fr.report_id),' active validated reports have been linked to this zone. Review DSS recommendations and prepare the appropriate response.') description,
+      'Major Incident' severity_level,'Validated' status,MAX(fr.created_at) created_at,z.zone_name affected_zones
+    FROM zones z
+    JOIN flood_report_zones frz ON frz.zone_id=z.zone_id
+    JOIN flood_reports fr ON fr.report_id=frz.report_id AND fr.status='Validated'
+    GROUP BY z.zone_id,z.zone_name HAVING COUNT(DISTINCT fr.report_id)>=3
+    ORDER BY COUNT(DISTINCT fr.report_id) DESC,MAX(fr.created_at) DESC LIMIT 1`);
+  if (zoneAlerts[0]) return res.json({ alert: zoneAlerts[0] });
   const [items] = await db.query<any[]>(`
     SELECT fr.report_id,fr.tracking_code,fr.location_text,fr.incident_type,fr.description,
       fr.severity_level,fr.status,fr.created_at,GROUP_CONCAT(DISTINCT z.zone_name ORDER BY z.zone_name SEPARATOR ', ') affected_zones
@@ -747,6 +1131,44 @@ app.put("/api/notifications/:id/read-status", requireAuth, asyncRoute(async (req
   res.status(204).end();
 }));
 
+app.get("/api/statistics/dss", requireAuth, asyncRoute(async (req, res) => {
+  res.json(await loadDss(req.query));
+}));
+
+let weatherCache: { expiresAt: number; value: unknown } | undefined;
+app.get("/api/weather/current", asyncRoute(async (_req, res) => {
+  if (weatherCache && weatherCache.expiresAt > Date.now()) return res.json(weatherCache.value);
+  const params = new URLSearchParams({
+    latitude: "13.7828976",
+    longitude: "122.8852784",
+    timezone: "Asia/Manila",
+    forecast_days: "3",
+    current: "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,wind_speed_10m",
+    daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum"
+  });
+  const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, { signal: AbortSignal.timeout(8_000) });
+  if (!response.ok) throw new Error(`Weather provider returned ${response.status}`);
+  const source = await response.json() as any;
+  const daily = source.daily ?? {};
+  const value = {
+    location: "Colacling, Lupi, Camarines Sur",
+    timezone: source.timezone,
+    updatedAt: source.current?.time,
+    current: source.current,
+    forecast: (daily.time ?? []).map((date: string, index: number) => ({
+      date,
+      weatherCode: daily.weather_code?.[index],
+      temperatureMax: daily.temperature_2m_max?.[index],
+      temperatureMin: daily.temperature_2m_min?.[index],
+      precipitationProbability: daily.precipitation_probability_max?.[index],
+      precipitation: daily.precipitation_sum?.[index]
+    })),
+    source: "Open-Meteo"
+  };
+  weatherCache = { value, expiresAt: Date.now() + 10 * 60_000 };
+  res.json(value);
+}));
+
 app.get("/api/statistics/risk-summary", requireAuth, asyncRoute(async (_req, res) => {
   const [rows] = await db.query<any[]>(`
     SELECT CASE
@@ -797,16 +1219,88 @@ app.get("/api/statistics/evacuation-priorities", requireAuth, asyncRoute(async (
   res.json({ items });
 }));
 
+// Serve the Angular build from the same Node.js site on SMARTERASP.NET.
+if (existsSync(config.frontendDistRoot)) {
+  app.use(express.static(config.frontendDistRoot, { index: false, maxAge: config.isProduction ? "1d" : 0 }));
+  app.use((req, res, next) => {
+    if (req.method !== "GET" || req.path.startsWith("/api/") || !req.accepts("html")) return next();
+    res.sendFile(join(config.frontendDistRoot, "index.html"));
+  });
+}
+
+const inputLabels: Record<string, string> = {
+  reporterName: "Reporter name",
+  reporterContactInfo: "Reporter contact information",
+  locationText: "Pinned location",
+  incidentType: "Incident type",
+  severityLevel: "Incident level",
+  latitude: "Latitude",
+  longitude: "Longitude",
+  description: "Description",
+  status: "Status",
+  validationNotes: "Reviewer notes",
+  zoneIds: "Affected Barangay Zones",
+  email: "Email address",
+  username: "Username",
+  password: "Password"
+};
+
+function readableInputIssue(issue: z.core.$ZodIssue) {
+  const fieldName = String(issue.path[issue.path.length - 1] ?? "form");
+  const label = inputLabels[fieldName] ?? fieldName
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/^./, (letter) => letter.toUpperCase());
+  if (issue.code === "invalid_type") return `${label} is required.`;
+  if (issue.code === "invalid_value") return `Please select a valid ${label.toLowerCase()}.`;
+  if (issue.code === "too_small") return issue.message || `${label} is required.`;
+  if (issue.code === "too_big") return issue.message || `${label} is too long.`;
+  if (issue.code === "invalid_format") return issue.message || `Please enter a valid ${label.toLowerCase()}.`;
+  return issue.message || `Please check ${label.toLowerCase()}.`;
+}
+
+function databaseErrorMessage(error: any) {
+  switch (error?.code) {
+    case "ER_NO_SUCH_TABLE": return "The database is missing a required table. Run the latest database initialization.";
+    case "ER_BAD_FIELD_ERROR": return "The database schema is out of date. Run the latest database initialization.";
+    case "ER_BAD_NULL_ERROR":
+    case "ER_NO_DEFAULT_FOR_FIELD": return "Please complete all required fields.";
+    case "ER_DATA_TOO_LONG": return "One of the entered values is too long. Please shorten it and try again.";
+    case "WARN_DATA_TRUNCATED":
+    case "ER_TRUNCATED_WRONG_VALUE": return "One of the entered values is invalid. Please review the form and try again.";
+    case "ER_DUP_ENTRY": return "A record with the same unique value already exists.";
+    case "ER_NO_REFERENCED_ROW_2": return "A selected related record no longer exists. Refresh the page and select it again.";
+    case "ER_ROW_IS_REFERENCED_2": return "This record is still being used by other data and cannot be removed.";
+    case "ECONNREFUSED":
+    case "PROTOCOL_CONNECTION_LOST":
+    case "ER_SERVER_SHUTDOWN": return "The database is temporarily unavailable. Start MySQL in XAMPP and try again.";
+    default: return undefined;
+  }
+}
+
 app.use(async (error: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
   if (files.length) await Promise.all(files.map((file) => unlink(file.path).catch(() => undefined)));
+  const databaseMessage = databaseErrorMessage(error);
+  const validationIssues = error instanceof z.ZodError ? error.issues.map(readableInputIssue) : [];
   const status =
-    error instanceof z.ZodError ? 400 :
+    validationIssues.length ? 400 :
+    error?.type === "entity.parse.failed" ? 400 :
     ["LIMIT_FILE_SIZE", "LIMIT_FILE_COUNT"].includes(error?.code) ? 413 :
     error?.code === "ER_DUP_ENTRY" ? 409 :
-    error?.code === "ER_NO_REFERENCED_ROW_2" ? 400 :
+    ["ER_NO_REFERENCED_ROW_2", "ER_BAD_NULL_ERROR", "ER_NO_DEFAULT_FOR_FIELD", "ER_DATA_TOO_LONG", "WARN_DATA_TRUNCATED", "ER_TRUNCATED_WRONG_VALUE"].includes(error?.code) ? 400 :
+    ["ECONNREFUSED", "PROTOCOL_CONNECTION_LOST", "ER_SERVER_SHUTDOWN"].includes(error?.code) ? 503 :
     ["JsonWebTokenError", "TokenExpiredError"].includes(error?.name) ? 401 : 500;
-  res.status(status).json({ message: status === 500 ? "Unexpected server error" : error.message, issues: error.issues });
+  if (status === 500) console.error(`${req.method} ${req.path} failed`, error);
+  const message = validationIssues[0]
+    ?? databaseMessage
+    ?? (error?.type === "entity.parse.failed"
+      ? "The submitted form data is invalid. Refresh the page and try again."
+      : ["LIMIT_FILE_SIZE", "LIMIT_FILE_COUNT"].includes(error?.code)
+      ? "Upload up to 5 photos, with each file no larger than 5 MB."
+      : status === 500
+        ? "The server could not complete the request. Please try again."
+        : error.message);
+  res.status(status).json({ message, issues: validationIssues.length ? validationIssues : undefined });
 });
 
 app.listen(config.port, () => console.log(`BantayBaha API listening on http://localhost:${config.port}`));

@@ -29,6 +29,17 @@ delete all data and rebuild the database from the current schema, explicitly con
 npm run db:fresh
 ```
 
+## SMARTERASP.NET deployment package
+
+Run `./build-smarterasp.ps1` from PowerShell to produce a single-site deployment under
+`deploy/smarterasp`. The package serves the Angular application at `/` and the Express API
+at `/api` through IIS `httpPlatformHandler`.
+
+Before uploading, create a production `.env` from the generated `.env.example` and enter
+the database, JWT, and SMTP secrets. Never upload placeholder values as live credentials.
+Import the database dump separately through the hosting database tools; the dump is
+intentionally excluded from the web package.
+
 To seed only authority accounts, run `npm run seed:users` from `backend`. It creates or
 reactivates these development accounts without overwriting their passwords on subsequent runs:
 

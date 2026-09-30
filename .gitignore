@@ -10,6 +10,7 @@
 **/coverage/
 **/out-tsc/
 **/tmp/
+deploy/
 
 # Environment files and local secrets
 .env

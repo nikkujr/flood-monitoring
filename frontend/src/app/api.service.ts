@@ -2,6 +2,7 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, signal } from '@angular/core';
 import { tap } from 'rxjs';
 import { environment } from '../environments/environment';
+import type { DssData } from './dss.models';
 
 export interface SessionUser {
   userId: string;
@@ -9,6 +10,35 @@ export interface SessionUser {
   username: string;
   email: string;
   role: 'Super Admin' | 'Disaster Officer' | 'Data Encoder';
+}
+
+export interface WeatherData {
+  location: string;
+  timezone: string;
+  updatedAt: string;
+  current: {
+    temperature_2m: number;
+    apparent_temperature: number;
+    relative_humidity_2m: number;
+    precipitation: number;
+    rain: number;
+    weather_code: number;
+    wind_speed_10m: number;
+  };
+  forecast: Array<{ date: string; weatherCode: number; temperatureMax: number; temperatureMin: number; precipitationProbability: number; precipitation: number }>;
+  source: string;
+}
+
+export interface ResidentYearSummary {
+  totalResidents: number;
+  totalHouseholds: number;
+  vulnerableResidents: number;
+  highPriorityResidents: number;
+  seniorCitizens: number;
+  children: number;
+  personsWithDisability: number;
+  pregnantResidents: number;
+  residentsWithMorbidity: number;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -50,9 +80,10 @@ export class ApiService {
     return this.http.post<void>(`${this.baseUrl}/auth/reset-password`, { token, password });
   }
 
-  list<T>(resource: string, page = 1, pageSize = 20, search = '', sortBy = '', sortOrder: 'asc' | 'desc' = 'desc') {
+  list<T>(resource: string, page = 1, pageSize = 20, search = '', sortBy = '', sortOrder: 'asc' | 'desc' = 'desc', filters: Record<string, string> = {}) {
     let params = new HttpParams().set('page', page).set('pageSize', pageSize).set('search', search).set('sortOrder', sortOrder);
     if (sortBy) params = params.set('sortBy', sortBy);
+    for (const [name, value] of Object.entries(filters)) if (value) params = params.set(`filter_${name}`, value);
     return this.http.get<{ items: T[]; page: number; pageSize: number; totalItems: number; totalPages: number }>(
       `${this.baseUrl}/${resource}`, { params }
     );
@@ -74,7 +105,24 @@ export class ApiService {
     return this.http.delete<void>(`${this.baseUrl}/${resource}/${id}`);
   }
 
-  updateReportStatus(id: string, body: { status: string; severityLevel: string; validationNotes: string; zoneIds: string[] }) {
+  residentsByYear<T>(year: number, page = 1, pageSize = 20, search = '', sortBy = '', sortOrder: 'asc' | 'desc' = 'asc', filters: Record<string, string> = {}) {
+    let params = new HttpParams().set('year', year).set('page', page).set('pageSize', pageSize).set('search', search).set('sortOrder', sortOrder);
+    if (sortBy) params = params.set('sortBy', sortBy);
+    for (const [name, value] of Object.entries(filters)) if (value) params = params.set(`filter_${name}`, value);
+    return this.http.get<{ items: T[]; page: number; pageSize: number; totalItems: number; totalPages: number; year: number; currentYear: number; availableYears: number[]; summary: ResidentYearSummary }>(
+      `${this.baseUrl}/residents/yearly`, { params }
+    );
+  }
+
+  assignResidents(shelterId: string, residentIds: string[], evacuationAt: string) {
+    return this.http.post<{ message: string; assignedCount: number }>(`${this.baseUrl}/shelters/${shelterId}/assignments`, { residentIds, evacuationAt });
+  }
+
+  returnResidentHome(residentId: string, returnedAt: string) {
+    return this.http.post<{ message: string }>(`${this.baseUrl}/residents/${residentId}/return-home`, { returnedAt });
+  }
+
+  updateReportStatus(id: string, body: { status: string; severityLevel: string; validationNotes?: string; zoneIds: string[] }) {
     return this.http.put<void>(`${this.baseUrl}/flood-reports/${id}/status`, body);
   }
 
@@ -97,12 +145,15 @@ export class ApiService {
   initiateUserPasswordReset(id: string) { return this.http.post<{ message: string }>(`${this.baseUrl}/users/${id}/reset-password`, {}); }
 
   liveMap() { return this.http.get(`${this.baseUrl}/map/live`); }
+  currentWeather() { return this.http.get<WeatherData>(`${this.baseUrl}/weather/current`); }
   dashboardSummary() {
     return this.http.get<{
       totalResidents: number;
       totalHouseholds: number;
       vulnerableResidents: number;
       highPriorityResidents: number;
+      mediumPriorityResidents: number;
+      lowPriorityResidents: number;
       totalZones: number;
       activeReports: number;
       pendingReports: number;
@@ -134,10 +185,17 @@ export class ApiService {
   }
 
   submitFloodReport(form: FormData) {
-    return this.http.post<{ reportId: string; trackingCode: string; status: string }>(`${this.baseUrl}/flood-reports`, form);
+    return this.http.post<{ reportId: string; trackingCode: string; status: string; zoneId: string | null; zoneName: string | null }>(`${this.baseUrl}/flood-reports`, form);
   }
 
   statistics(resource: 'risk-summary' | 'zone-breakdown' | 'evacuation-priorities') {
     return this.http.get<Record<string, unknown>>(`${this.baseUrl}/statistics/${resource}`);
   }
+
+  decisionSupport(filters: Record<string, string>) {
+    let params = new HttpParams();
+    for (const [name, value] of Object.entries(filters)) if (value) params = params.set(name, value);
+    return this.http.get<DssData>(`${this.baseUrl}/statistics/dss`, { params });
+  }
+
 }

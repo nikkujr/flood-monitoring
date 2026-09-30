@@ -1,0 +1,100 @@
+<header class="heading">
+  <div><span class="eyebrow">DECISION SUPPORT</span><h1>Flood reports &amp; readiness analytics</h1><p>Evidence-based risk, population exposure, and evacuation planning for Barangay Colacling.</p></div>
+  <button type="button" class="refresh-button" (click)="reload()" [disabled]="loading">↻ Refresh</button>
+</header>
+<form class="panel filters" aria-label="Decision-support filters" (submit)="applyFilters(); $event.preventDefault()">
+  <div class="filter-title"><span aria-hidden="true">⌕</span><div><b>Assessment filters</b><small>Define the reporting scope, then apply the selection.</small></div>@if (activeFilterCount) {<strong>{{activeFilterCount}} active</strong>}</div>
+  <fieldset class="filter-group"><legend>Location and risk</legend>
+    <label>Barangay zone<select name="zone" aria-label="Zone" [(ngModel)]="draftFilters['zone']"><option value="">All zones</option>@for (zone of zoneOptions; track zone.id) {<option [value]="zone.id">{{ zone.name }}</option>}</select></label>
+    <label>Assessed risk<select name="risk" aria-label="Risk level" [(ngModel)]="draftFilters['risk']"><option value="">All risk levels</option>@for (risk of risks; track risk) {<option [value]="risk">{{risk}}</option>}</select></label>
+  </fieldset>
+  <fieldset class="filter-group date-group"><legend>Reporting period</legend>
+    <label>From<input name="from" type="date" [(ngModel)]="draftFilters['from']" /></label>
+    <label>To<input name="to" type="date" [(ngModel)]="draftFilters['to']" /></label>
+  </fieldset>
+  <fieldset class="filter-group population-group"><legend>Incident and population</legend>
+    <label>Severity<select name="severity" aria-label="Incident severity" [(ngModel)]="draftFilters['severity']"><option value="">All severities</option>@for (severity of severities; track severity) {<option [value]="severity">{{severity}}</option>}</select></label>
+    <label>Resident status<select name="evacuationStatus" aria-label="Evacuation status" [(ngModel)]="draftFilters['evacuationStatus']"><option value="">All statuses</option>@for (status of statuses; track status) {<option [value]="status">{{status}}</option>}</select></label>
+    <label>Vulnerability<select name="vulnerability" aria-label="Vulnerability" [(ngModel)]="draftFilters['vulnerability']"><option value="">All residents</option>@for (v of vulnerabilities; track v) {<option [value]="v">{{v === 'Any' ? 'Any vulnerability' : v}}</option>}</select></label>
+  </fieldset>
+  <div class="filter-footer">
+    <div class="active-filter-list" aria-live="polite">@if (activeFilterLabels.length) {@for (label of activeFilterLabels; track label) {<span>{{label}}</span>}} @else {<small>Showing the complete assessment</small>}</div>
+    <div class="filter-actions"><button type="button" class="reset-button" (click)="reset()" [disabled]="!activeFilterCount && !draftFilters['zone'] && !draftFilters['risk'] && !draftFilters['from'] && !draftFilters['to'] && !draftFilters['severity'] && !draftFilters['evacuationStatus'] && !draftFilters['vulnerability']">Reset</button><button type="submit" class="apply-filter-button" [disabled]="loading">Apply filters</button></div>
+  </div>
+</form>
+@if (loading) {<p class="notice" role="status">{{data ? 'Refreshing assessment…' : 'Loading decision-support data…'}}</p>}
+@if (error) {<div class="error" role="alert"><span>{{error}}</span><button type="button" (click)="reload()">Retry</button></div>}
+@if (data; as d) {
+  <div class="analysis-meta"><span>{{d.scope}}</span><time>Updated {{d.generatedAt | date:'medium'}} · Auto-refreshes every 30 seconds</time></div>
+  <nav class="statistics-tabs" aria-label="Reports and statistics sections">
+    @for (tab of tabs; track tab.id) {
+      <button type="button" [class.active]="activeTab === tab.id" [attr.aria-selected]="activeTab === tab.id" (click)="selectTab(tab.id)">{{tab.label}}</button>
+    }
+  </nav>
+  <div class="statistics-tab-panel" [hidden]="activeTab !== 'overview'">
+  <section class="risk-hero" [attr.data-risk]="level(d.overall.risk)">
+    <div class="risk-symbol">{{d.overall.risk === 'Critical' ? '!!' : d.overall.risk === 'High' ? '!' : d.overall.risk === 'Moderate' ? '≈' : '✓'}}</div>
+    <div><span class="eyebrow">CURRENT RULE-BASED ASSESSMENT</span><h2>{{d.overall.risk ? d.overall.risk + ' flood risk' : 'Insufficient data'}}</h2><p>{{d.overall.explanation}}</p></div><span class="risk-badge">{{d.overall.risk || 'Unknown'}}</span>
+  </section>
+  @for (alert of d.alerts; track alert.zoneId) {<div class="risk-alert" role="alert" [attr.data-risk]="level(alert.risk)"><span>!</span><div><b>{{alert.zone}} requires attention</b><small>{{alert.message}}</small></div></div>}
+  @if (!d.coverage.registeredPopulationKnown) {<p class="notice">Population exposure cannot be calculated because the selected zones have no registered residents.</p>}
+  @else if (d.coverage.missingPopulationZones.length) {<p class="notice">Population records need verification in {{d.coverage.missingPopulationZones.join(', ')}}.</p>}
+  <section class="metrics" aria-label="Key response indicators">@for (metric of metrics; track metric.label) {<article class="metric"><span class="metric-icon">{{metric.icon}}</span><div><strong>{{metric.value}}</strong><small>{{metric.label}}</small></div></article>}</section>
+  </div>
+  <section class="analytics-grid statistics-tab-panel" [hidden]="activeTab !== 'reports'" aria-label="Flood report analytics">
+    <article class="panel chart-panel"><div class="section-heading"><div><span class="eyebrow">REPORT QUALITY</span><h2>Report status distribution</h2></div><strong>{{d.incidents.total}} reports</strong></div>
+      <div class="donut-layout"><div class="donut" [style.background]="statusDonut" role="img" [attr.aria-label]="d.incidents.total + ' reports grouped by status'"><div><b>{{d.incidents.total}}</b><span>Total</span></div></div><div class="chart-legend">@for (item of reportStatuses; track item.label) {<div><i [class]="item.className"></i><span>{{item.label}}</span><b>{{item.value}}</b></div>}</div></div>
+      @if (d.incidents.unassignedActive) {<p class="chart-warning">! {{d.incidents.unassignedActive}} validated report(s) still need an affected zone.</p>}
+    </article>
+    <article class="panel chart-panel"><div class="section-heading"><div><span class="eyebrow">INCIDENT PROFILE</span><h2>Reports by severity</h2></div></div><div class="bar-chart" role="img" aria-label="Flood reports grouped by severity">@for (item of d.incidents.bySeverity; track item.severity) {<div class="bar-row"><span>{{item.severity}}</span><div><i [class]="level(item.severity)" [style.width.%]="item.count / maxSeverity * 100"></i></div><b>{{item.count}}</b></div>}</div><p class="chart-note">Severity describes reported impact; only validated reports raise current risk.</p></article>
+    <article class="panel chart-panel zone-chart">
+      <div class="section-heading"><div><span class="eyebrow">SPATIAL PATTERN</span><h2>Report concentration by zone</h2><p>Total reports recorded in each barangay zone.</p></div><small>Selected reporting period</small></div>
+      @if (d.zones.length) {
+        <div class="zone-graph-scroll">
+          <div class="zone-column-graph" role="img" aria-label="Column graph of flood report totals by barangay zone">
+            <div class="zone-y-title">Number of reports</div>
+            <div class="zone-y-axis" aria-hidden="true">@for (tick of zoneAxisTicks; track $index) {<span>{{tick}}</span>}</div>
+            <div class="zone-plot">
+              <div class="zone-grid-lines" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="zone-columns" [style.grid-template-columns]="'repeat(' + d.zones.length + ', minmax(74px, 1fr))'">
+                @for (zone of d.zones; track zone.id) {
+                  <div class="zone-column" [attr.aria-label]="zone.name + ': ' + zone.totalReports + ' reports, ' + zone.risk + ' risk'">
+                    <div class="zone-column-value">{{zone.totalReports}}</div>
+                    <div class="zone-column-track"><i [attr.data-risk]="level(zone.risk)" [style.height.%]="zone.totalReports / maxZoneReports * 100"></i></div>
+                    <b>{{zone.name}}</b><small [attr.data-risk]="level(zone.risk)">{{zone.risk}}</small>
+                  </div>
+                }
+              </div>
+              <div class="zone-x-title">Barangay zone</div>
+            </div>
+          </div>
+        </div>
+      } @else {<p class="empty">No zone data matches this assessment scope.</p>}
+    </article>
+  </section>
+  <section class="panel geoanalytics-card statistics-tab-panel" [hidden]="activeTab !== 'zones'" aria-labelledby="geoanalytics-heading">
+    <div class="geoanalytics-heading"><div><span class="eyebrow">GEOANALYTICSPH ASSESSMENT SNAPSHOT</span><h2 id="geoanalytics-heading">Total land area prone to flood</h2><p>{{geoAnalyticsLocation.barangay}}, {{geoAnalyticsLocation.municipality}}, {{geoAnalyticsLocation.province}}, {{geoAnalyticsLocation.region}}</p></div><a [href]="geoAnalyticsUrl" target="_blank" rel="noopener noreferrer">Verify source ↗</a></div>
+    <div class="geoanalytics-results">
+      <div class="geoanalytics-chart" [style.background]="geoAnalyticsChart" role="img" aria-label="Flood susceptibility: 72 percent safe, 15.4 percent low, 7 percent moderate, and 5.6 percent high"><div><b>{{geoAnalyticsPronePercent}}%</b><span>flood-prone</span></div></div>
+      <div class="geoanalytics-legend">@for (item of geoAnalyticsAssessment; track item.label) {<div><i [style.background]="item.color"></i><span>{{item.label}}</span><b>{{item.percent}}%</b></div>}</div>
+      <div class="geoanalytics-table"><table><thead><tr><th>Assessment</th><th class="numeric">Share</th><th class="numeric">Approx. area (sqm)</th></tr></thead><tbody>@for (item of geoAnalyticsAssessment; track item.label) {<tr><td><i [style.background]="item.color"></i>{{item.label}}</td><td class="numeric">{{item.percent}}%</td><td class="numeric">{{item.area.toLocaleString()}}</td></tr>}<tr class="geoanalytics-total"><td>Total land area</td><td class="numeric">100%</td><td class="numeric">{{geoAnalyticsTotalArea.toLocaleString()}}</td></tr></tbody></table></div>
+    </div>
+    <div class="geoanalytics-summary"><b>{{geoAnalyticsProneArea.toLocaleString()}} sqm</b> out of <b>{{geoAnalyticsTotalArea.toLocaleString()}} sqm</b> is prone to flood ({{geoAnalyticsPronePercent}}%). <small>Values reproduced from the supplied GeoAnalyticsPH screenshot; this is a saved reference snapshot, not a live data feed.</small></div>
+  </section>
+  <section class="panel statistics-tab-panel" [hidden]="activeTab !== 'zones'"><div class="section-heading"><div><span class="eyebrow">RISK AND EXPOSURE</span><h2>Zone assessment</h2><p>Potential exposure represents registered people in zones with active validated reports—not confirmed flood victims.</p></div></div><div class="table-scroll"><table><thead><tr><th>Zone</th><th>Risk</th><th class="numeric">Active reports</th><th class="numeric">Potentially exposed</th><th class="numeric">Vulnerable exposed</th><th>Recommended response</th></tr></thead><tbody>
+    @for (zone of d.zones; track zone.id) {<tr><td><b>{{zone.name}}</b><small>{{zone.repeatReports >= 2 ? zone.repeatReports + ' validated/resolved records indicate repeated reporting' : 'No repeated-report pattern'}}</small></td><td><span class="badge" [attr.data-risk]="level(zone.risk)">{{zone.risk}}</span></td><td class="numeric">{{zone.activeReports}}</td><td class="numeric">{{zone.populationKnown ? zone.affectedResidents : 'No data'}}</td><td class="numeric">{{zone.populationKnown ? zone.affectedVulnerable : 'No data'}}</td><td>{{zone.response}}</td></tr>} @empty {<tr><td colspan="6" class="empty">No zone assessment matches the selected filters.</td></tr>}
+  </tbody></table></div></section>
+  <section class="two-column statistics-tab-panel" [hidden]="activeTab !== 'evacuation'">
+    <article class="panel"><div class="section-heading"><div><span class="eyebrow">PROTECTIVE ACTION</span><h2>Residents needing assistance</h2><p>Evacuated residents and lower-priority cases are excluded.</p></div><b>{{d.evacuation.length}}</b></div><div class="table-scroll"><table class="compact-table"><thead><tr><th>Resident</th><th>Zone</th><th>Priority</th><th>Reason</th><th>Status</th></tr></thead><tbody>
+      @for (person of d.evacuation.slice((pages['evacuation']! - 1)*20,pages['evacuation']!*20); track person.id) {<tr><td><b>{{person.name}}</b><small>{{person.household}}</small></td><td>{{person.zone}}</td><td><b>{{person.priority}}</b></td><td>{{person.vulnerabilities.join(', ') || person.assistance.join(', ') || 'Zone risk'}}</td><td>{{person.status}}</td></tr>} @empty {<tr><td colspan="5" class="empty">No residents currently meet the assistance rules.</td></tr>}
+    </tbody></table></div><div class="pagination"><span>Page {{pages['evacuation']}} of {{pageCount('evacuation')}}</span><button (click)="movePage('evacuation',-1)" [disabled]="pages['evacuation'] === 1">Previous</button><button (click)="movePage('evacuation',1)" [disabled]="pages['evacuation'] === pageCount('evacuation')">Next</button></div></article>
+    <article class="panel shelter-readiness"><div class="section-heading"><div><span class="eyebrow">EVACUATION READINESS</span><h2>Center capacity</h2><p>Known capacity and recorded occupancy for selected zones.</p></div></div><div class="capacity-summary"><span><b>{{shelterSummary.capacity}}</b>Total capacity</span><span><b>{{shelterSummary.occupancy}}</b>Occupied</span><span><b>{{shelterSummary.available}}</b>Available</span></div>
+      @for (shelter of d.shelters; track shelter.id) {<div class="shelter-row"><div><b>{{shelter.name}}</b><small>{{shelter.zone}} · {{shelter.status}}</small></div><span>{{shelter.occupancy ?? 'Unknown'}} / {{shelter.capacity}}</span><div class="capacity-track"><i [style.width.%]="shelter.occupancy === null || !shelter.capacity ? 0 : shelter.occupancy / shelter.capacity * 100"></i></div></div>} @empty {<p class="empty">No evacuation-center data for the selected zones.</p>}
+    </article>
+  </section>
+  <section class="panel recommendations-panel statistics-tab-panel" [hidden]="activeTab !== 'evacuation'"><div class="section-heading"><div><span class="eyebrow">DSS OUTPUT</span><h2>Recommended actions</h2><p>Rule-based guidance for local-authority review and coordination.</p></div></div><div class="recommendations">@for (item of d.recommendations; track $index) {<article [attr.data-risk]="level(item.risk)"><span>{{item.risk}}</span><div><b>{{item.zone}}</b><p>{{item.text}}</p><small>{{item.reason}}</small></div></article>} @empty {<p class="empty">No recommendations for this assessment scope.</p>}</div></section>
+  <section class="panel statistics-tab-panel" [hidden]="activeTab !== 'reports'"><div class="section-heading"><div><span class="eyebrow">REPORT TRACEABILITY</span><h2>Recent incident records</h2><p>Use these records to verify the evidence behind the assessment.</p></div></div><div class="table-scroll"><table><thead><tr><th>Tracking code / location</th><th>Affected zone</th><th>Severity</th><th>Status</th><th>Reported</th></tr></thead><tbody>
+    @for (report of d.incidents.recent; track report.id) {<tr><td><b>{{report.code}}</b><small>{{report.location}}</small></td><td>{{report.zones.join(', ') || 'Unassigned'}}</td><td><span class="severity-label" [class]="level(report.severity)">{{report.severity}}</span></td><td>{{report.status}}</td><td>{{report.createdAt | date:'medium'}}</td></tr>} @empty {<tr><td colspan="5" class="empty">No incident records match the selected filters.</td></tr>}
+  </tbody></table></div></section>
+  <details class="panel rules statistics-tab-panel" [hidden]="activeTab !== 'methodology'" open><summary>Methodology and decision rules</summary><p>The DSS supports—rather than replaces—official field assessment. Expand the rules below for research transparency.</p><ol>@for (rule of d.rules; track rule) {<li>{{rule}}</li>}</ol></details>
+}

@@ -55,13 +55,22 @@ for (const [index, [name, risk, lat, lng]] of zones.entries()) {
 
 const vulnerabilities = [null, null, "Elderly", "Child", "Disability", "Pregnant", "Mobility-limited"];
 for (let h = 1; h <= 25; h++) {
-  const zoneId = id(`zone-${((h - 1) % 5) + 1}`);
-  const householdId = id(`household-${h}`);
+  const zoneNumber = ((h - 1) % 5) + 1;
+  const householdNumberWithinZone = Math.floor((h - 1) / 5) + 1;
+  const zoneId = id(`zone-${zoneNumber}`);
+  const generatedHouseholdId = id(`household-${h}`);
   await db.execute(
     `INSERT INTO households(household_id,household_number,zone_id,address_line,head_of_household_name,contact_number,verification_status)
      VALUES(?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE zone_id=VALUES(zone_id),address_line=VALUES(address_line),verification_status=VALUES(verification_status)`,
-    [householdId, `COL-${String(h).padStart(4, "0")}`, zoneId, `Purok ${((h - 1) % 5) + 1}, Barangay Colacling`, `Resident Head ${h}`, `0917000${String(h).padStart(4, "0")}`, h % 5 === 0 ? "Pending Verification" : "Verified"]
+    [generatedHouseholdId, `Z${zoneNumber}-${householdNumberWithinZone}`, zoneId, `Purok ${zoneNumber}, Barangay Colacling`, `Resident Head ${h}`, `0917000${String(h).padStart(4, "0")}`, h % 5 === 0 ? "Pending Verification" : "Verified"]
   );
+  // A local database may already contain this unique household number under a
+  // different UUID. Use the persisted ID so resident foreign keys remain valid.
+  const [persistedHouseholds] = await db.execute<import("mysql2").RowDataPacket[]>(
+    "SELECT household_id FROM households WHERE household_number=? LIMIT 1",
+    [`Z${zoneNumber}-${householdNumberWithinZone}`]
+  );
+  const householdId = String(persistedHouseholds[0]!.household_id);
   for (let member = 1; member <= 3; member++) {
     const vulnerability = vulnerabilities[(h + member) % vulnerabilities.length] ?? null;
     const year = vulnerability === "Elderly" ? 1950 + (h % 12) : vulnerability === "Child" ? 2015 + (h % 7) : 1980 + ((h * member) % 25);

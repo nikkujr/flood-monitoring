@@ -2,7 +2,8 @@
   "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
   "version": 1,
   "cli": {
-    "packageManager": "npm"
+    "packageManager": "npm",
+    "analytics": false
   },
   "newProjectRoot": "projects",
   "projects": {
@@ -57,8 +58,17 @@
           },
           "configurations": {
             "production": {
+              "optimization": {
+                "scripts": true,
+                "styles": {
+                  "minify": true,
+                  "inlineCritical": false
+                },
+                "fonts": false
+              },
               "allowedCommonJsDependencies": [
-                "leaflet"
+                "leaflet",
+                "leaflet.gridlayer.googlemutant"
               ],
               "budgets": [
                 {
@@ -68,8 +78,8 @@
                 },
                 {
                   "type": "anyComponentStyle",
-                  "maximumWarning": "26kB",
-                  "maximumError": "30kB"
+                  "maximumWarning": "36kB",
+                  "maximumError": "52kB"
                 }
               ],
               "outputHashing": "all"

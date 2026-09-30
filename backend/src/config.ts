@@ -16,6 +16,7 @@ export const config = {
   accessTtl: process.env.JWT_ACCESS_TTL ?? "15m",
   refreshTtl: process.env.JWT_REFRESH_TTL ?? "7d",
   uploadRoot: resolve(process.env.UPLOAD_ROOT ?? "storage/uploads"),
+  frontendDistRoot: resolve(process.env.FRONTEND_DIST_ROOT ?? "public"),
   defaultPageSize: Number(process.env.DEFAULT_PAGE_SIZE ?? 20),
   maxPageSize: Number(process.env.MAX_PAGE_SIZE ?? 100),
   refreshCookieDomain: process.env.REFRESH_COOKIE_DOMAIN,

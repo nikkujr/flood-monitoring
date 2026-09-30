@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://bantaybaha2026-001-site1.ktempurl.com/sitemap.xml
