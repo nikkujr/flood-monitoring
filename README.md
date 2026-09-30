@@ -22,14 +22,28 @@ Requirements: Node.js 26+, npm 11+, and MySQL 8.4 LTS.
 
 The seed command is idempotent and requires a `SEED_DEFAULT_PASSWORD` of at least 12 characters.
 
-`npm run db:init` safely creates missing schema objects and applies compatibility cleanup. To
+For an existing production database, back it up first, then run the migration from the
+deployed site directory (which contains `.env`, `dist/`, and `sql/`):
+
+```powershell
+node dist/migrate.js
+```
+
+The migration requires an explicit `DATABASE_URL` and an existing database with a `users`
+table. It creates missing schema objects and applies compatibility changes without seeding
+demonstration data or dropping `monitoring_stations`. In a development checkout, use
+`npm run db:migrate` from `backend` instead. The database user needs permission to create
+tables and alter existing tables. MySQL schema changes commit as they run, so keep a backup
+in case a later step fails.
+
+`npm run db:init` is for local setup and also runs the demonstration seed. To
 delete all data and rebuild the database from the current schema, explicitly confirm the reset:
 
 ```powershell
 npm run db:fresh
 ```
 
-Run `npm run db:init` before deploying account recovery changes. Existing databases receive
+Run the production migration before deploying account recovery changes. Existing databases receive
 `users.must_change_password` and `users.credential_version` without resetting account data.
 For emailed password resets in production, set `SMTP_HOST` and `PASSWORD_RESET_URL` in the
 backend environment. A Super Admin can generate a one-time temporary password when email
