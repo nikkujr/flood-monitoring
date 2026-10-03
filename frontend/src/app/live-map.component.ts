@@ -32,6 +32,12 @@ type MapStyle = 'roadmap' | 'satellite' | 'hybrid' | 'terrain';
               <span><i class="legend-line boundary"></i>Barangay boundary</span>
             }
             @if (visibleLayers?.riskZones !== false) { <span><i class="legend-area risk-zone"></i>Risk-zone overlay</span> }
+            @if (visibleLayers?.floodHazards === true) {
+              <p class="legend-group-title">Official flood susceptibility</p>
+              <span><i class="legend-area hazard-low"></i>Low susceptibility</span>
+              <span><i class="legend-area hazard-moderate"></i>Moderate susceptibility</span>
+              <span><i class="legend-area hazard-high"></i>High susceptibility</span>
+            }
             @if (visibleLayers?.incidents !== false) {
               <p class="legend-group-title">Locations & routes</p>
               <span><i class="legend-marker incident">!</i>Minor incident</span>
@@ -39,12 +45,13 @@ type MapStyle = 'roadmap' | 'satellite' | 'hybrid' | 'terrain';
             }
             @if (visibleLayers?.shelters !== false) { <span><i class="legend-marker shelter" aria-hidden="true">⌂</i>Evacuation center</span> }
             @if (visibleLayers?.routes !== false) { <span><i class="legend-line route"></i>Evacuation route</span> }
+            @if (visibleLayers?.rivers === true) { <span><i class="legend-line river"></i>Mapped river or stream</span> }
           </div>
         </details>
       }
     </div>
   `,
-  styles: [`:host{display:block}.map-shell{position:relative;height:360px;width:100%;border-radius:12px;overflow:hidden}.leaflet-host{height:100%;width:100%}.map-shell.full{height:min(68vh,720px)}.map-shell.viewport{height:100%;min-height:520px}.map-style-control{position:absolute;right:12px;top:12px;z-index:1000;display:flex;padding:3px;background:#fff;border:1px solid #d8e0ea;border-radius:8px;box-shadow:0 2px 8px #15304a2e}.map-style-control button{border:0;background:transparent;color:#40506a;border-radius:6px;padding:6px 9px;font:600 11px/1.1 inherit;cursor:pointer}.map-style-control button.active{background:#0758c7;color:#fff}.map-legend-control{position:absolute;left:12px;bottom:28px;z-index:1000;width:min(235px,calc(100% - 24px));background:#fffffff2;border:1px solid #d5dee9;border-radius:9px;box-shadow:0 3px 12px #17334f2b;color:#344861}.map-legend-control summary{padding:9px 11px;cursor:pointer;font:700 10px/1.2 inherit;list-style:none}.map-legend-control summary::-webkit-details-marker{display:none}.map-legend-control summary:after{content:'−';float:right;color:#708198}.map-legend-control:not([open]) summary:after{content:'+'}.legend-items{display:grid;grid-template-columns:1fr 1fr;gap:8px 11px;padding:0 11px 11px;border-top:1px solid #e5eaf0;padding-top:9px}.legend-items span{display:flex;align-items:center;gap:7px;min-width:0;font:500 8px/1.25 inherit}.legend-items i{display:inline-grid;place-items:center;flex:0 0 auto;font-style:normal}.legend-area{width:14px;height:10px;border-radius:2px;background:#43a26766;border:2px solid #43a267}.legend-area.moderate{background:#e6a62566;border-color:#e6a625}.legend-area.high{background:#d9505066;border-color:#d95050}.legend-area.critical{background:#8f1d2c66;border-color:#8f1d2c}.legend-area.risk-zone{background:#8b5cf64d;border-color:#8b5cf6}.legend-line{width:17px;height:0;border-top:3px dashed #1764c1}.legend-line.route{border-top-color:#6e49b8}.legend-marker{width:18px;height:18px;border-radius:50%;background:#e6a625;color:#fff;font-size:10px;font-weight:800}.legend-marker.major{background:#d95050}.legend-marker.shelter{background:#18895c}@media(max-width:600px){.map-legend-control{width:min(205px,calc(100% - 24px))}.legend-items{grid-template-columns:1fr}.legend-items span{font-size:9px}}`]
+  styles: [`:host{display:block}.map-shell{position:relative;height:360px;width:100%;border-radius:12px;overflow:hidden}.leaflet-host{height:100%;width:100%}.map-shell.full{height:min(68vh,720px)}.map-shell.viewport{height:100%;min-height:520px}.map-style-control{position:absolute;right:12px;top:12px;z-index:1000;display:flex;padding:3px;background:#fff;border:1px solid #d8e0ea;border-radius:8px;box-shadow:0 2px 8px #15304a2e}.map-style-control button{border:0;background:transparent;color:#40506a;border-radius:6px;padding:6px 9px;font:600 11px/1.1 inherit;cursor:pointer}.map-style-control button.active{background:#0758c7;color:#fff}.map-legend-control{position:absolute;left:12px;bottom:28px;z-index:1000;width:min(235px,calc(100% - 24px));background:#fffffff2;border:1px solid #d5dee9;border-radius:9px;box-shadow:0 3px 12px #17334f2b;color:#344861}.map-legend-control summary{padding:9px 11px;cursor:pointer;font:700 10px/1.2 inherit;list-style:none}.map-legend-control summary::-webkit-details-marker{display:none}.map-legend-control summary:after{content:'−';float:right;color:#708198}.map-legend-control:not([open]) summary:after{content:'+'}.legend-items{display:grid;grid-template-columns:1fr 1fr;gap:8px 11px;padding:0 11px 11px;border-top:1px solid #e5eaf0;padding-top:9px}.legend-items span{display:flex;align-items:center;gap:7px;min-width:0;font:500 8px/1.25 inherit}.legend-items i{display:inline-grid;place-items:center;flex:0 0 auto;font-style:normal}.legend-area{width:14px;height:10px;border-radius:2px;background:#43a26766;border:2px solid #43a267}.legend-area.moderate{background:#e6a62566;border-color:#e6a625}.legend-area.high{background:#d9505066;border-color:#d95050}.legend-area.critical{background:#8f1d2c66;border-color:#8f1d2c}.legend-area.risk-zone{background:#8b5cf64d;border-color:#8b5cf6}.legend-line{width:17px;height:0;border-top:3px dashed #1764c1}.legend-line.route{border-top-color:#6e49b8}.legend-line.river{border-top:4px solid #1687d1}.legend-marker{width:18px;height:18px;border-radius:50%;background:#e6a625;color:#fff;font-size:10px;font-weight:800}.legend-marker.major{background:#d95050}.legend-marker.shelter{background:#18895c}@media(max-width:600px){.map-legend-control{width:min(205px,calc(100% - 24px))}.legend-items{grid-template-columns:1fr}.legend-items span{font-size:9px}}`]
 })
 export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
   @Input() full = false;
@@ -52,9 +59,10 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
   @Input() showLabels = false;
   @Input() refreshNonce = 0;
   @Input() focusRecord?: { id: string; resource: string; record: Record<string, unknown>; nonce: number };
-  @Input() visibleLayers?: { barangayZones: boolean; shelters: boolean; riskZones: boolean; incidents?: boolean; routes?: boolean };
+  @Input() visibleLayers?: { barangayZones: boolean; shelters: boolean; riskZones: boolean; incidents?: boolean; routes?: boolean; rivers?: boolean; floodHazards?: boolean };
   @Output() dataUpdated = new EventEmitter<Record<string, unknown>>();
   @Output() incidentSelected = new EventEmitter<Record<string, unknown>>();
+  @Output() hazardSelected = new EventEmitter<Record<string, unknown>>();
   readonly mapId = `bantay-map-${Math.random().toString(36).slice(2)}`;
   private map?: L.Map;
   private overlay = L.layerGroup();
@@ -64,6 +72,8 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
   private resizeFrame?: number;
   private lastData?: Record<string, any>;
   private officialBoundary?: GeoJSON.GeoJsonObject;
+  private floodHazards?: GeoJSON.FeatureCollection;
+  private waterways?: GeoJSON.FeatureCollection;
   private boundaryFitted = false;
   private visibleLayerKey = '';
   mapStyle: MapStyle = 'roadmap';
@@ -73,7 +83,6 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
   private googleLayers: Partial<Record<MapStyle, L.Layer>> = {};
   private activeBaseLayer?: L.Layer;
   private satelliteLabels?: L.TileLayer;
-
   constructor(private readonly api: ApiService) {}
 
   ngAfterViewInit() {
@@ -116,6 +125,9 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
     this.activeBaseLayer = roadmapLayer;
     this.overlay.addTo(this.map);
     this.focusOverlay.addTo(this.map);
+    this.map.attributionControl.addAttribution('Waterways © OpenStreetMap contributors');
+    this.loadFloodHazards();
+    this.loadWaterways();
     this.refresh();
     this.focusSelectedRecord();
     this.timer = window.setInterval(() => this.refresh(), 30_000);
@@ -224,6 +236,24 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
     }
     this.overlay.clearLayers();
     if (this.visibleLayers?.barangayZones !== false) this.drawOfficialBoundary();
+    if (this.visibleLayers?.floodHazards === true && this.floodHazards) {
+      const hazardColors: Record<string, string> = { '01': '#e3d1ff', '02': '#b045ff', '03': '#5900ff', '04': '#002673' };
+      const hazardLabels: Record<string, string> = { '01': 'Low', '02': 'Moderate', '03': 'High', '04': 'Very High' };
+      L.geoJSON(this.floodHazards, {
+        style: (feature) => ({ color: hazardColors[String(feature?.properties?.['fscode'] ?? '')] ?? '#7d55c7', fillColor: hazardColors[String(feature?.properties?.['fscode'] ?? '')] ?? '#7d55c7', fillOpacity: .5, weight: 1.5 }),
+        onEachFeature: (feature, layer) => {
+          const code = String(feature.properties?.['fscode'] ?? '');
+          layer.bindPopup(`<strong>${hazardLabels[code] ?? 'Flood'} susceptibility</strong><br>DENR-MGB flood hazard assessment, 2018<br>Barangay Colacling (Del Rosario)`);
+          layer.on('click', () => this.hazardSelected.emit({ code, level: hazardLabels[code] ?? 'Flood', source: 'DENR-MGB', year: 2018 }));
+        }
+      }).addTo(this.overlay);
+    }
+    if (this.visibleLayers?.rivers === true && this.waterways) {
+      L.geoJSON(this.waterways, {
+        style: (feature) => ({ color: feature?.properties?.['waterway'] === 'stream' ? '#35a7e8' : '#0b78c8', weight: feature?.properties?.['waterway'] === 'stream' ? 4 : 6, opacity: .92 }),
+        onEachFeature: (feature, layer) => layer.bindPopup(`<strong>${this.escape(String(feature.properties?.['name'] ?? (feature.properties?.['waterway'] === 'stream' ? 'Stream' : 'River')))}</strong>`)
+      }).addTo(this.overlay);
+    }
     const visibleBounds = this.visibleLayers?.barangayZones !== false && this.officialBoundary
       ? L.geoJSON(this.officialBoundary).getBounds()
       : L.latLngBounds([]);
@@ -308,6 +338,26 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
         const feature = collection.features[0];
         if (!feature || !this.map) return;
         this.officialBoundary = feature;
+        this.render(this.lastData ?? {});
+      })
+      .catch(() => undefined);
+  }
+
+  private loadFloodHazards() {
+    fetch('colacling-flood-hazard.geojson')
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((collection: GeoJSON.FeatureCollection) => {
+        this.floodHazards = collection;
+        this.render(this.lastData ?? {});
+      })
+      .catch(() => undefined);
+  }
+
+  private loadWaterways() {
+    fetch('colacling-waterways.geojson')
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((collection: GeoJSON.FeatureCollection) => {
+        this.waterways = collection;
         this.render(this.lastData ?? {});
       })
       .catch(() => undefined);

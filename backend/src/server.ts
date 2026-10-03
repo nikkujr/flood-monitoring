@@ -115,7 +115,10 @@ app.get("/api/health", asyncRoute(async (_req, res) => {
 // frontend
 app.post("/api/auth/login", asyncRoute(async (req, res) => {
   // once receive the req, extract u and p (condition)
-  const input = z.object({ username: z.string().min(1), password: z.string().min(1) }).parse(req.body);
+  const input = z.object({
+    username: z.string({ error: "Username is required." }).trim().min(1, "Username is required."),
+    password: z.string({ error: "Password is required." }).min(1, "Password is required.")
+  }).parse(req.body);
   const [rows] = await db.execute<any[]>("SELECT * FROM users WHERE username=? AND is_active=1 LIMIT 1", [input.username]);
   const row = rows[0];
   if (!row || !(await bcrypt.compare(input.password, row.password_hash))) {
@@ -182,7 +185,7 @@ async function issuePasswordReset(userId: string, email: string) {
 }
 
 app.post("/api/auth/forgot-password", asyncRoute(async (req, res) => {
-  const { email } = z.object({ email: z.string().email() }).parse(req.body);
+  const { email } = z.object({ email: z.string({ error: "Email address is required." }).trim().email("Enter a valid email address.") }).parse(req.body);
   const [rows] = await db.execute<any[]>("SELECT user_id,email FROM users WHERE email=? AND is_active=1 LIMIT 1", [email]);
   if (rows[0]) {
     try { await issuePasswordReset(rows[0].user_id, rows[0].email); }
@@ -194,7 +197,7 @@ app.post("/api/auth/forgot-password", asyncRoute(async (req, res) => {
 app.post("/api/auth/reset-password", asyncRoute(async (req, res) => {
   const input = z.object({
     token: z.string().min(32),
-    password: z.string().min(12).regex(/[A-Z]/).regex(/[a-z]/).regex(/\d/)
+    password: z.string().min(12, "Password must contain at least 12 characters.").regex(/[A-Z]/, "Password must include an uppercase letter.").regex(/[a-z]/, "Password must include a lowercase letter.").regex(/\d/, "Password must include a number.")
   }).parse(req.body);
   const [rows] = await db.execute<any[]>(
     "SELECT password_reset_token_id,user_id FROM password_reset_tokens WHERE token_hash=? AND used_at IS NULL AND expires_at>NOW() LIMIT 1",
@@ -219,8 +222,8 @@ app.post("/api/auth/reset-password", asyncRoute(async (req, res) => {
 
 app.post("/api/auth/change-password", requireAuth, asyncRoute(async (req: AuthRequest, res) => {
   const input = z.object({
-    currentPassword: z.string().min(1),
-    newPassword: z.string().min(12).regex(/[A-Z]/).regex(/[a-z]/).regex(/\d/)
+    currentPassword: z.string().min(1, "Current password is required."),
+    newPassword: z.string().min(12, "New password must contain at least 12 characters.").regex(/[A-Z]/, "New password must include an uppercase letter.").regex(/[a-z]/, "New password must include a lowercase letter.").regex(/\d/, "New password must include a number.")
   }).parse(req.body);
   const [rows] = await db.execute<any[]>("SELECT password_hash,username,role,full_name,email,credential_version FROM users WHERE user_id=? AND is_active=1", [req.user!.userId]);
   const row = rows[0];
@@ -244,12 +247,27 @@ app.post("/api/auth/change-password", requireAuth, asyncRoute(async (req: AuthRe
 }));
 
 const userInput = z.object({
-  fullName: z.string().min(2),
-  username: z.string().min(3),
-  email: z.string().email(),
+  fullName: z.string().trim().min(2),
+  username: z.string().trim().min(3),
+  email: z.string().trim().toLowerCase().email(),
   role: z.enum(["Super Admin", "Disaster Officer", "Data Encoder"]),
-  password: z.string().min(12).regex(/[A-Z]/).regex(/[a-z]/).regex(/\d/).optional()
+  password: z.string().min(12, "Password must contain at least 12 characters.").regex(/[A-Z]/, "Password must include an uppercase letter.").regex(/[a-z]/, "Password must include a lowercase letter.").regex(/\d/, "Password must include a number.").optional()
 });
+
+async function ensureUniqueUserIdentity(username: string, email: string, excludedUserId?: string) {
+  const params: string[] = [username, email];
+  let sql = "SELECT user_id,username,email FROM users WHERE (LOWER(username)=LOWER(?) OR LOWER(email)=LOWER(?))";
+  if (excludedUserId) {
+    sql += " AND user_id<>?";
+    params.push(excludedUserId);
+  }
+  sql += " LIMIT 1";
+  const [rows] = await db.execute<any[]>(sql, params);
+  const duplicate = rows[0];
+  if (!duplicate) return;
+  const field = String(duplicate.username).toLowerCase() === username.toLowerCase() ? "username" : "email";
+  throw new z.ZodError([{ code: "custom", path: [field], message: `That ${field} is already used by another account` }]);
+}
 
 app.get("/api/users", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => paginated(res, "users", req, {
   columns: "user_id,full_name,username,email,role,is_active,last_login_at,created_at,updated_at",
@@ -258,6 +276,7 @@ app.get("/api/users", requireAuth, requireRoles("Super Admin"), asyncRoute(async
 })));
 app.post("/api/users", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => {
   const input = userInput.extend({ password: userInput.shape.password.unwrap() }).parse(req.body);
+  await ensureUniqueUserIdentity(input.username, input.email);
   const id = randomUUID();
   await db.execute(
     "INSERT INTO users(user_id,full_name,username,email,password_hash,role) VALUES(?,?,?,?,?,?)",
@@ -270,8 +289,29 @@ app.get("/api/users/:id", requireAuth, requireRoles("Super Admin"), asyncRoute(a
   res.json((rows as any[])[0]);
 }));
 app.put("/api/users/:id", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => {
-  const input = userInput.omit({ password: true }).parse(req.body);
-  await db.execute("UPDATE users SET full_name=?,username=?,email=?,role=? WHERE user_id=?", [input.fullName, input.username, input.email, input.role, String(req.params.id)]);
+  const input = userInput.parse(req.body);
+  const userId = String(req.params.id);
+  await ensureUniqueUserIdentity(input.username, input.email, userId);
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    if (input.password) {
+      await connection.execute(
+        "UPDATE users SET full_name=?,username=?,email=?,role=?,password_hash=?,must_change_password=0,credential_version=credential_version+1 WHERE user_id=?",
+        [input.fullName, input.username, input.email, input.role, await bcrypt.hash(input.password, 12), userId]
+      );
+      await connection.execute("UPDATE refresh_tokens SET revoked_at=NOW() WHERE user_id=? AND revoked_at IS NULL", [userId]);
+      await connection.execute("UPDATE password_reset_tokens SET used_at=NOW() WHERE user_id=? AND used_at IS NULL", [userId]);
+    } else {
+      await connection.execute("UPDATE users SET full_name=?,username=?,email=?,role=? WHERE user_id=?", [input.fullName, input.username, input.email, input.role, userId]);
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
   res.status(204).end();
 }));
 app.put("/api/users/:id/active-status", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req: AuthRequest, res) => {
@@ -395,6 +435,7 @@ app.post("/api/flood-reports", uploads.array("photos", 5), asyncRoute(async (req
       [id, trackingCode, input.reporterName ?? null, input.reporterContactInfo ?? null, input.locationText, input.incidentType, input.latitude, input.longitude, input.description, JSON.stringify(photos), input.severityLevel]
     );
     if (zone) await connection.execute("INSERT INTO flood_report_zones(report_id,zone_id) VALUES(?,?)", [id, zone.zone_id]);
+    if (zone) await syncAutomaticRiskZones(connection, [String(zone.zone_id)]);
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -463,6 +504,69 @@ async function serveReportPhoto(reportId: string, indexValue: string, publicOnly
   }
   res.sendFile(absolutePath);
 }
+
+async function syncAutomaticRiskZones(connection: any, zoneIds: string[]) {
+  for (const zoneId of [...new Set(zoneIds)]) {
+    const [sourceRows] = await connection.query(
+      "SELECT zone_name FROM zones WHERE zone_id=? LIMIT 1",
+      [zoneId]
+    );
+    const sourceZone = sourceRows[0];
+    if (!sourceZone) continue;
+
+    // Zone records imported at different times can have names such as "Zone 4"
+    // and "Zone 4 - South Fields". Treat them as aliases so their validated
+    // reports contribute to the same automatic risk zone.
+    const zoneNumber = String(sourceZone.zone_name).match(/^zone\s*(\d+)/i)?.[1];
+    const [aliases] = zoneNumber
+      ? await connection.query(
+          `SELECT zone_id,zone_name,polygon_geojson
+           FROM zones
+           WHERE LOWER(TRIM(zone_name)) REGEXP ?
+           ORDER BY CHAR_LENGTH(zone_name) DESC,created_at DESC`,
+          [`^zone[[:space:]]*${zoneNumber}([^0-9]|$)`]
+        )
+      : await connection.query(
+          `SELECT zone_id,zone_name,polygon_geojson
+           FROM zones
+           WHERE LOWER(TRIM(zone_name))=LOWER(TRIM(?))
+           ORDER BY CHAR_LENGTH(zone_name) DESC,created_at DESC`,
+          [sourceZone.zone_name]
+        );
+    if (!aliases.length) continue;
+
+    const canonicalZone = aliases[0];
+    const aliasIds = aliases.map((zone: any) => String(zone.zone_id));
+    const [counts] = await connection.query(
+      `SELECT COUNT(DISTINCT fr.report_id) report_count,
+        COALESCE(MAX(fr.severity_level='Major Incident'),0) major_count
+       FROM flood_report_zones frz
+       JOIN flood_reports fr ON fr.report_id=frz.report_id AND fr.status='Validated'
+       WHERE frz.zone_id IN (?)`,
+      [aliasIds]
+    );
+    const automaticName = `Automatic Flood Risk - ${canonicalZone.zone_name}`;
+    const aliasNames = aliases.map((zone: any) => `Automatic Flood Risk - ${zone.zone_name}`);
+    await connection.query(
+      "DELETE FROM risk_zones WHERE risk_zone_name IN (?) AND risk_zone_name<>?",
+      [aliasNames, automaticName]
+    );
+    const reportCount = Number(counts[0]?.report_count ?? 0);
+    if (reportCount < 3) {
+      await connection.execute("DELETE FROM risk_zones WHERE risk_zone_name=?", [automaticName]);
+      continue;
+    }
+    const riskLevel = reportCount >= 5 || Number(counts[0]?.major_count ?? 0) > 0 ? "High" : "Medium";
+    const description = `Automatically generated from ${reportCount} validated flood reports in ${canonicalZone.zone_name}.`;
+    await connection.execute(
+      `INSERT INTO risk_zones(risk_zone_id,risk_zone_name,risk_level,polygon_geojson,description)
+       VALUES(?,?,?,?,?)
+       ON DUPLICATE KEY UPDATE risk_level=VALUES(risk_level),polygon_geojson=VALUES(polygon_geojson),description=VALUES(description)`,
+      [randomUUID(), automaticName, riskLevel, canonicalZone.polygon_geojson, description]
+    );
+  }
+}
+
 app.get("/api/flood-reports/public/:id/photos/:index", asyncRoute(async (req, res) =>
   serveReportPhoto(String(req.params.id), String(req.params.index), true, res)
 ));
@@ -483,12 +587,14 @@ app.put("/api/flood-reports/:id/status", requireAuth, requireRoles("Super Admin"
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
+    const [previousZones] = await connection.query<any[]>("SELECT zone_id FROM flood_report_zones WHERE report_id=?", [String(req.params.id)]);
     await connection.execute(
       "UPDATE flood_reports SET status=?,severity_level=?,validation_notes=?,validated_by_user_id=?,validated_at=IF(?='Validated',NOW(),validated_at) WHERE report_id=?",
       [input.status, input.severityLevel, input.validationNotes, req.user!.userId, input.status, String(req.params.id)]
     );
     await connection.execute("DELETE FROM flood_report_zones WHERE report_id=?", [String(req.params.id)]);
     for (const zoneId of uniqueZoneIds) await connection.execute("INSERT INTO flood_report_zones(report_id,zone_id) VALUES(?,?)", [String(req.params.id), zoneId]);
+    await syncAutomaticRiskZones(connection, [...previousZones.map((zone) => String(zone.zone_id)), ...uniqueZoneIds]);
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -511,9 +617,11 @@ app.delete("/api/flood-reports/:id", requireAuth, requireRoles("Super Admin"), a
       return res.status(404).json({ message: "Flood report not found" });
     }
     photoUrls = reports[0].photo_urls;
+    const [affectedZones] = await connection.query<any[]>("SELECT zone_id FROM flood_report_zones WHERE report_id=?", [reportId]);
     await connection.execute("UPDATE notifications SET flood_report_id=NULL WHERE flood_report_id=?", [reportId]);
     await connection.execute("DELETE FROM flood_report_zones WHERE report_id=?", [reportId]);
     await connection.execute("DELETE FROM flood_reports WHERE report_id=?", [reportId]);
+    await syncAutomaticRiskZones(connection, affectedZones.map((zone) => String(zone.zone_id)));
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -549,7 +657,38 @@ app.get("/api/map/live", asyncRoute(async (_req, res) => {
       LEFT JOIN flood_report_zones frz ON frz.zone_id=z.zone_id
       LEFT JOIN flood_reports fr ON fr.report_id=frz.report_id AND fr.status='Validated'
       GROUP BY z.zone_id`),
-    db.query("SELECT * FROM risk_zones"),
+    db.query(`WITH zone_aliases AS (
+        SELECT z.*,
+          COALESCE(LOWER(REGEXP_SUBSTR(TRIM(z.zone_name),'^zone[[:space:]]*[0-9]+')),LOWER(TRIM(z.zone_name))) zone_key,
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(LOWER(REGEXP_SUBSTR(TRIM(z.zone_name),'^zone[[:space:]]*[0-9]+')),LOWER(TRIM(z.zone_name)))
+            ORDER BY CHAR_LENGTH(z.zone_name) DESC,z.created_at DESC
+          ) canonical_rank
+        FROM zones z
+      ), validated_counts AS (
+        SELECT COALESCE(LOWER(REGEXP_SUBSTR(TRIM(z.zone_name),'^zone[[:space:]]*[0-9]+')),LOWER(TRIM(z.zone_name))) zone_key,
+          COUNT(DISTINCT fr.report_id) report_count,
+          MAX(fr.severity_level='Major Incident') major_count,
+          MIN(fr.created_at) created_at,MAX(fr.updated_at) updated_at
+        FROM zones z
+        JOIN flood_report_zones frz ON frz.zone_id=z.zone_id
+        JOIN flood_reports fr ON fr.report_id=frz.report_id AND fr.status='Validated'
+        GROUP BY zone_key
+        HAVING COUNT(DISTINCT fr.report_id)>=3
+      )
+      SELECT * FROM risk_zones
+      UNION ALL
+      SELECT CONCAT('auto-',z.zone_id) risk_zone_id,
+        CONCAT('Automatic Flood Risk - ',z.zone_name) risk_zone_name,
+        CASE WHEN c.report_count>=5 OR c.major_count>0 THEN 'High' ELSE 'Medium' END risk_level,
+        z.polygon_geojson,
+        CONCAT('Automatically generated from ',c.report_count,' validated flood reports in ',z.zone_name,'.') description,
+        c.created_at,c.updated_at
+      FROM zone_aliases z
+      JOIN validated_counts c ON c.zone_key=z.zone_key
+      WHERE z.canonical_rank=1
+        AND NOT EXISTS(SELECT 1 FROM risk_zones rz WHERE rz.risk_zone_name=CONCAT('Automatic Flood Risk - ',z.zone_name))
+      `),
     db.query(`SELECT s.*,(SELECT COUNT(*) FROM residents r WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active') current_occupancy
       FROM shelters s WHERE s.status!='Unavailable' AND s.record_status='Active'`),
     db.query(`SELECT report_id,tracking_code,location_text,incident_type,latitude,longitude,description,photo_urls,severity_level,status,validated_at,created_at
@@ -1045,13 +1184,29 @@ for (const path of ["residents", "shelters", "volunteers", "evacuation-routes", 
   app.delete(`/api/${path}/:id`, requireAuth, requireRoles(...resource.writeRoles), asyncRoute(async (req, res) => {
     const recordId = String(req.params.id);
     if (path === "shelters") {
-      const [references] = await db.query<any[]>(
-        "SELECT (SELECT COUNT(*) FROM evacuation_routes WHERE destination_shelter_id=?) + (SELECT COUNT(*) FROM residents WHERE evacuation_shelter_id=?) reference_count",
-        [recordId, recordId]
-      );
-      if (Number(references[0]?.reference_count ?? 0) > 0) {
-        return res.status(409).json({ message: "This shelter cannot be deleted while evacuation routes or resident assignments reference it" });
+      const connection = await db.getConnection();
+      try {
+        await connection.beginTransaction();
+        const [existing] = await connection.query<any[]>("SELECT shelter_id FROM shelters WHERE shelter_id=? FOR UPDATE", [recordId]);
+        if (!existing[0]) {
+          await connection.rollback();
+          return res.status(404).json({ message: "Evacuation center not found" });
+        }
+        await connection.execute(
+          "UPDATE residents SET evacuation_shelter_id=NULL,evacuation_status=CASE WHEN evacuation_status='Evacuated' THEN 'For Evacuation' ELSE evacuation_status END WHERE evacuation_shelter_id=?",
+          [recordId]
+        );
+        await connection.execute("UPDATE evacuation_assignments SET shelter_id=NULL WHERE shelter_id=?", [recordId]);
+        await connection.execute("DELETE FROM evacuation_routes WHERE destination_shelter_id=?", [recordId]);
+        await connection.execute("DELETE FROM shelters WHERE shelter_id=?", [recordId]);
+        await connection.commit();
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      } finally {
+        connection.release();
       }
+      return res.status(204).end();
     }
     const [result] = await db.execute<any>(
       `DELETE FROM ${baseTable(resource.table)} WHERE ${resource.idColumn}=?`,
@@ -1062,22 +1217,63 @@ for (const path of ["residents", "shelters", "volunteers", "evacuation-routes", 
   }));
 }
 
+app.delete("/api/households/:id", requireAuth, requireRoles("Super Admin", "Data Encoder"), asyncRoute(async (req, res) => {
+  const householdId = String(req.params.id);
+  const [[household]] = await db.query<any[]>("SELECT household_number FROM households WHERE household_id=?", [householdId]);
+  if (!household) return res.status(404).json({ message: "Household not found" });
+  const [[members]] = await db.query<any[]>("SELECT COUNT(*) member_count FROM residents WHERE household_id=?", [householdId]);
+  if (Number(members.member_count) > 0) {
+    return res.status(409).json({ message: `Household ${household.household_number} still has ${members.member_count} resident record(s). Reassign or delete those residents first.` });
+  }
+  await db.execute("DELETE FROM households WHERE household_id=?", [householdId]);
+  res.status(204).end();
+}));
+
 app.delete("/api/barangay-zones/:id", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => {
   const zoneId = String(req.params.id);
-  const [references] = await db.query<any[]>(`
-    SELECT
-      (SELECT COUNT(*) FROM households WHERE zone_id=?) +
-      (SELECT COUNT(*) FROM shelters WHERE zone_id=?) +
-      (SELECT COUNT(*) FROM volunteers WHERE assigned_zone_id=?) +
-      (SELECT COUNT(*) FROM evacuation_routes WHERE origin_zone_id=?) +
-      (SELECT COUNT(*) FROM flood_report_zones WHERE zone_id=?) +
-      (SELECT COUNT(*) FROM notification_target_zones WHERE zone_id=?) AS reference_count
-  `, [zoneId, zoneId, zoneId, zoneId, zoneId, zoneId]);
-  if (Number(references[0]?.reference_count ?? 0) > 0) {
-    return res.status(409).json({ message: "This zone cannot be deleted because households, map records, reports, or notifications still reference it" });
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [existing] = await connection.query<any[]>("SELECT zone_id,zone_name FROM zones WHERE zone_id=? FOR UPDATE", [zoneId]);
+    if (!existing[0]) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Barangay zone not found" });
+    }
+    const zoneNumber = String(existing[0].zone_name).match(/^zone\s*(\d+)/i)?.[1];
+    const [replacementRows] = zoneNumber
+      ? await connection.query<any[]>("SELECT zone_id,zone_name FROM zones WHERE zone_id<>? AND LOWER(zone_name) LIKE ? ORDER BY CHAR_LENGTH(zone_name) DESC LIMIT 1 FOR UPDATE", [zoneId, `zone ${zoneNumber}%`])
+      : [[]];
+    const replacement = replacementRows[0];
+    const [references] = await connection.query<any[]>("SELECT (SELECT COUNT(*) FROM households WHERE zone_id=?) household_count,(SELECT COUNT(*) FROM shelters WHERE zone_id=?) shelter_count", [zoneId, zoneId]);
+    const householdCount = Number(references[0]?.household_count ?? 0);
+    const shelterCount = Number(references[0]?.shelter_count ?? 0);
+    if ((householdCount || shelterCount) && !replacement) {
+      await connection.rollback();
+      return res.status(409).json({
+        message: `Move or delete ${householdCount} linked household${householdCount === 1 ? "" : "s"} and ${shelterCount} evacuation center${shelterCount === 1 ? "" : "s"} before deleting this zone.`
+      });
+    }
+    if (replacement) {
+      await connection.execute("UPDATE households SET zone_id=? WHERE zone_id=?", [replacement.zone_id, zoneId]);
+      await connection.execute("UPDATE shelters SET zone_id=? WHERE zone_id=?", [replacement.zone_id, zoneId]);
+      await connection.execute("UPDATE volunteers SET assigned_zone_id=? WHERE assigned_zone_id=?", [replacement.zone_id, zoneId]);
+      await connection.execute("UPDATE evacuation_routes SET origin_zone_id=? WHERE origin_zone_id=?", [replacement.zone_id, zoneId]);
+      await connection.execute("INSERT IGNORE INTO flood_report_zones(report_id,zone_id) SELECT report_id,? FROM flood_report_zones WHERE zone_id=?", [replacement.zone_id, zoneId]);
+      await connection.execute("INSERT IGNORE INTO notification_target_zones(notification_id,zone_id) SELECT notification_id,? FROM notification_target_zones WHERE zone_id=?", [replacement.zone_id, zoneId]);
+    } else {
+      await connection.execute("UPDATE volunteers SET assigned_zone_id=NULL WHERE assigned_zone_id=?", [zoneId]);
+      await connection.execute("DELETE FROM evacuation_routes WHERE origin_zone_id=?", [zoneId]);
+    }
+    await connection.execute("DELETE FROM flood_report_zones WHERE zone_id=?", [zoneId]);
+    await connection.execute("DELETE FROM notification_target_zones WHERE zone_id=?", [zoneId]);
+    await connection.execute("DELETE FROM zones WHERE zone_id=?", [zoneId]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
   }
-  const [result] = await db.execute<any>("DELETE FROM zones WHERE zone_id=?", [zoneId]);
-  if (!result.affectedRows) return res.status(404).json({ message: "Barangay zone not found" });
   res.status(204).end();
 }));
 
@@ -1294,7 +1490,7 @@ app.get("/api/statistics/risk-summary", requireAuth, asyncRoute(async (_req, res
     LEFT JOIN flood_report_zones frz ON frz.report_id=fr.report_id
     LEFT JOIN risk_zones rz ON ST_Intersects(
       ST_GeomFromGeoJSON(rz.polygon_geojson),
-      ST_SRID(POINT(fr.longitude, fr.latitude),4326)
+      ST_GeomFromText(CONCAT('POINT(',fr.longitude,' ',fr.latitude,')'),4326)
     )
     WHERE fr.status='Validated'`);
   res.json(rows[0]);
@@ -1365,9 +1561,17 @@ function readableInputIssue(issue: z.core.$ZodIssue) {
     .replace(/^./, (letter) => letter.toUpperCase());
   if (issue.code === "invalid_type") return `${label} is required.`;
   if (issue.code === "invalid_value") return `Please select a valid ${label.toLowerCase()}.`;
-  if (issue.code === "too_small") return issue.message || `${label} is required.`;
-  if (issue.code === "too_big") return issue.message || `${label} is too long.`;
-  if (issue.code === "invalid_format") return issue.message || `Please enter a valid ${label.toLowerCase()}.`;
+  if (issue.code === "too_small") {
+    const minimum = Number((issue as any).minimum ?? 0);
+    return minimum <= 1 ? `${label} is required.` : `${label} must contain at least ${minimum} characters.`;
+  }
+  if (issue.code === "too_big") {
+    const maximum = Number((issue as any).maximum ?? 0);
+    return maximum ? `${label} must not exceed ${maximum} characters.` : `${label} is too long.`;
+  }
+  if (issue.code === "invalid_format") {
+    return (issue as any).format === "email" ? `Enter a valid ${label.toLowerCase()}.` : `Please check the ${label.toLowerCase()} format.`;
+  }
   return issue.message || `Please check ${label.toLowerCase()}.`;
 }
 
@@ -1420,4 +1624,20 @@ app.use(async (error: any, req: express.Request, res: express.Response, _next: e
   res.status(status).json({ message, issues: validationIssues.length ? validationIssues : undefined, fieldErrors });
 });
 
-app.listen(config.port, () => console.log(`BantayBaha API listening on http://localhost:${config.port}`));
+app.listen(config.port, () => {
+  console.log(`BantayBaha API listening on http://localhost:${config.port}`);
+  void (async () => {
+    const connection = await db.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [zones] = await connection.query<any[]>("SELECT zone_id FROM zones");
+      await syncAutomaticRiskZones(connection, zones.map((zone) => String(zone.zone_id)));
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      console.error("Automatic risk-zone synchronization failed:", error instanceof Error ? error.message : "Unknown error");
+    } finally {
+      connection.release();
+    }
+  })();
+});

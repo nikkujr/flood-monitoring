@@ -50,6 +50,11 @@ export class ApiService {
 
   constructor(private readonly http: HttpClient) {}
 
+  clearSession() {
+    this.accessToken.set(null);
+    this.user.set(null);
+  }
+
   login(username: string, password: string) {
     return this.http.post<{ accessToken: string; user: SessionUser }>(
       `${this.baseUrl}/auth/login`, { username, password }, { withCredentials: true }
@@ -70,7 +75,7 @@ export class ApiService {
 
   logout() {
     return this.http.post<void>(`${this.baseUrl}/auth/logout`, {}, { withCredentials: true })
-      .pipe(tap(() => { this.accessToken.set(null); this.user.set(null); }));
+      .pipe(tap(() => this.clearSession()));
   }
 
   forgotPassword(email: string) {

@@ -45,9 +45,12 @@ npm run db:fresh
 
 Run the production migration before deploying account recovery changes. Existing databases receive
 `users.must_change_password` and `users.credential_version` without resetting account data.
-For emailed password resets in production, set `SMTP_HOST` and `PASSWORD_RESET_URL` in the
-backend environment. A Super Admin can generate a one-time temporary password when email
-delivery is unavailable; the account holder must change it at the next sign-in.
+For emailed password resets in production, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`,
+`SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and the public `PASSWORD_RESET_URL` in the backend
+environment. Port 465 normally uses `SMTP_SECURE=true`; port 587 normally uses `false`. The
+application intentionally cannot send mail while `SMTP_HOST` is blank. A Super Admin can generate
+a one-time temporary password when email delivery is unavailable; the account holder must change
+it at the next sign-in.
 
 ## SMARTERASP.NET deployment package
 

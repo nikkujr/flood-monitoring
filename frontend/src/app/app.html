@@ -1,23 +1,22 @@
 @if (sessionResolving) {
-  <div class="session-loader" role="status"><span>BB</span><p>Restoring your session…</p></div>
+  <div class="session-loader flood-loader" role="status"><span class="flood-loader-icon"><img src="barangay-colacling-seal.png" alt="" /><i></i><i></i><i></i></span><p>Loading BantayBaha…</p></div>
 } @else if (!api.user() && publicPage === 'login') {
   <section class="login-page">
     <div class="login-visual">
-      <div class="brand login-brand"><div class="brand-mark">BB</div><div><strong>BantayBaha</strong><span>Barangay Colacling</span></div></div>
+      <div class="brand login-brand"><div class="brand-mark"><img src="barangay-colacling-seal.png" alt="Barangay Colacling seal" /></div><div><strong>BantayBaha</strong><span>Barangay Colacling</span></div></div>
       <div><span class="eyebrow">COMMUNITY FLOOD READINESS</span><h1>Local information.<br>Faster action.</h1><p>Monitor flood conditions, protect vulnerable residents, and coordinate evacuation support from one secure command center.</p></div>
       <div class="login-map"><span class="pulse one"></span><span class="pulse two"></span><span class="pulse three"></span><small>Colacling, Lupi, Camarines Sur</small></div>
     </div>
 
     <div class="login-form-wrap">
-      <form class="login-card" (submit)="$event.preventDefault(); login(username.value, password.value)">
+      <form class="login-card" (submit)="login($event, username.value, password.value)" novalidate>
         <span class="eyebrow">AUTHORIZED ACCESS</span><h2>Welcome back</h2><p>Sign in using your local authority account.</p>
-        <label>Username<input #username autocomplete="username" placeholder="Enter your username" required /></label>
-        <label>Password<div class="password-field"><input #password [type]="showPassword ? 'text' : 'password'" autocomplete="current-password" placeholder="Enter your password" required /><button class="password-toggle" type="button" (click)="showPassword = !showPassword" [attr.aria-label]="showPassword ? 'Hide password' : 'Show password'" [attr.title]="showPassword ? 'Hide password' : 'Show password'"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">@if (showPassword) { <path d="M3 3l18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.9 4.2A10.8 10.8 0 0 1 12 4c5 0 8.3 4.1 9.5 6-0.5.8-1.2 1.8-2.1 2.7"/><path d="M6.6 6.6C4.7 7.9 3.5 9.6 2.5 11.2 3.7 13.1 7 17 12 17c1.1 0 2.1-.2 3-.6"/> } @else { <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z"/><circle cx="12" cy="12" r="3"/> }</svg></button></div></label>
+        <label>Username<input #username name="username" autocomplete="username" placeholder="Enter your username" required [attr.aria-invalid]="!!fieldErrors['username']" />@if (fieldErrors['username']) { <small class="field-error" role="alert">{{ fieldErrors['username'] }}</small> }</label>
+        <label>Password<div class="password-field"><input #password name="password" [type]="showPassword ? 'text' : 'password'" autocomplete="current-password" placeholder="Enter your password" required [attr.aria-invalid]="!!fieldErrors['password']" /><button class="password-toggle" type="button" (click)="showPassword = !showPassword" [attr.aria-label]="showPassword ? 'Hide password' : 'Show password'" [attr.title]="showPassword ? 'Hide password' : 'Show password'"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">@if (showPassword) { <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z"/><circle cx="12" cy="12" r="3"/> } @else { <path d="M3 3l18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.9 4.2A10.8 10.8 0 0 1 12 4c5 0 8.3 4.1 9.5 6-0.5.8-1.2 1.8-2.1 2.7"/><path d="M6.6 6.6C4.7 7.9 3.5 9.6 2.5 11.2 3.7 13.1 7 17 12 17c1.1 0 2.1-.2 3-.6"/> }</svg></button></div>@if (fieldErrors['password']) { <small class="field-error" role="alert">{{ fieldErrors['password'] }}</small> }</label>
         @if (errorMessage) { <div class="form-error">{{ errorMessage }}</div> }
         @if (successMessage) { <div class="success-message">{{ successMessage }}</div> }
         <button class="primary full" type="submit" [disabled]="loginLoading">{{ loginLoading ? 'Connecting…' : 'Sign in securely' }}</button>
         <button class="forgot-link" type="button" (click)="recoveryOpen = true">Forgot password?</button>
-        <small class="login-help">Seed accounts: admin, officer, or encoder</small>
       </form>
     </div>
   </section>
@@ -27,13 +26,13 @@
         <div class="panel-head"><div><span class="eyebrow">ACCOUNT RECOVERY</span><h2>{{ resetToken ? 'Choose a new password' : 'Reset your password' }}</h2></div><button class="modal-close" (click)="recoveryOpen = false">×</button></div>
         @if (errorMessage) { <div class="form-error">{{ errorMessage }}</div> }
         @if (!resetToken) {
-          <form (submit)="requestRecovery($event, recoveryEmail.value)">
-            <label class="wide">Registered email<input #recoveryEmail type="email" required /></label>
+          <form (submit)="requestRecovery($event, recoveryEmail.value)" novalidate>
+            <label class="wide">Registered email<input #recoveryEmail name="email" type="email" required [attr.aria-invalid]="!!fieldErrors['email']" />@if (fieldErrors['email']) { <small class="field-error" role="alert">{{ fieldErrors['email'] }}</small> }</label>
             <div class="modal-actions"><button type="button" class="secondary" (click)="recoveryOpen = false">Cancel</button><button class="primary" type="submit" [disabled]="loginLoading">Send reset link</button></div>
           </form>
         } @else {
-          <form (submit)="performReset($event, newPassword.value)">
-            <label class="wide">New password<input #newPassword type="password" minlength="12" required placeholder="12+ characters with uppercase, lowercase, and number" /></label>
+          <form (submit)="performReset($event, newPassword.value)" novalidate>
+            <label class="wide">New password<input #newPassword name="password" type="password" minlength="12" required placeholder="12+ characters with uppercase, lowercase, and number" [attr.aria-invalid]="!!fieldErrors['password']" />@if (fieldErrors['password']) { <small class="field-error" role="alert">{{ fieldErrors['password'] }}</small> }</label>
             <div class="modal-actions"><button type="button" class="secondary" (click)="recoveryOpen = false">Cancel</button><button class="primary" type="submit" [disabled]="loginLoading">Update password</button></div>
           </form>
         }
@@ -42,7 +41,7 @@
   }
 } @else if (api.user()?.mustChangePassword) {
   <section class="login-page">
-    <div class="login-visual"><div class="brand login-brand"><div class="brand-mark">BB</div><div><strong>BantayBaha</strong><span>Barangay Colacling</span></div></div><div><span class="eyebrow">ACCOUNT SECURITY</span><h1>Choose your own password.</h1><p>Your temporary password is valid for signing in. Replace it before using the command center.</p></div></div>
+    <div class="login-visual"><div class="brand login-brand"><div class="brand-mark"><img src="barangay-colacling-seal.png" alt="Barangay Colacling seal" /></div><div><strong>BantayBaha</strong><span>Barangay Colacling</span></div></div><div><span class="eyebrow">ACCOUNT SECURITY</span><h1>Choose your own password.</h1><p>Your temporary password is valid for signing in. Replace it before using the command center.</p></div></div>
     <div class="login-form-wrap">
       <form class="login-card" (submit)="changeTemporaryPassword($event, currentPassword.value, replacementPassword.value, confirmation.value)" novalidate>
         <span class="eyebrow">PASSWORD CHANGE REQUIRED</span><h2>Set a new password</h2>
@@ -58,7 +57,7 @@
 } @else if (!api.user()) {
   <div class="public-shell">
     <header class="public-nav">
-      <button class="public-brand" (click)="navigatePublic('home')"><span>BB</span><div><strong>BantayBaha</strong><small>Barangay Colacling</small></div></button>
+      <button class="public-brand" (click)="navigatePublic('home')"><span><img src="barangay-colacling-seal.png" alt="Barangay Colacling seal" /></span><div><strong>BantayBaha</strong><small>Barangay Colacling</small></div></button>
       <nav aria-label="Public navigation">
         <button [class.active]="publicPage === 'home'" (click)="navigatePublic('home')">Home</button>
         <button [class.active]="publicPage === 'map'" (click)="navigatePublic('map')">Live Map</button>
@@ -107,6 +106,8 @@
           <button type="button" [class.active]="!allPublicMapLayersVisible && publicMapLayers.riskZones" [attr.aria-pressed]="!allPublicMapLayersVisible && publicMapLayers.riskZones" (click)="selectPublicMapLayer('riskZones')"><i class="layer-symbol risk"></i>Risk zones</button>
           <button type="button" [class.active]="!allPublicMapLayersVisible && publicMapLayers.shelters" [attr.aria-pressed]="!allPublicMapLayersVisible && publicMapLayers.shelters" (click)="selectPublicMapLayer('shelters')"><i class="layer-symbol shelter-symbol" aria-hidden="true">⌂</i>Evacuation centers</button>
           <button type="button" [class.active]="!allPublicMapLayersVisible && publicMapLayers.incidents" [attr.aria-pressed]="!allPublicMapLayersVisible && publicMapLayers.incidents" (click)="selectPublicMapLayer('incidents')"><i class="layer-symbol report">!</i>Flood reports</button>
+          <button type="button" [class.active]="publicMapLayers.rivers" [attr.aria-pressed]="publicMapLayers.rivers" (click)="setPublicMapLayer('rivers', !publicMapLayers.rivers)"><i class="layer-symbol river-symbol"></i>Rivers</button>
+          <button type="button" [class.active]="publicMapLayers.floodHazards" [attr.aria-pressed]="publicMapLayers.floodHazards" (click)="setPublicMapLayer('floodHazards', !publicMapLayers.floodHazards)"><i class="layer-symbol hazard-symbol"></i>Flood hazard</button>
           <button type="button" class="map-label-toggle" [class.active]="publicMapLabelsVisible" [attr.aria-pressed]="publicMapLabelsVisible" (click)="togglePublicMapLabels()"><i aria-hidden="true">Aa</i>{{ publicMapLabelsVisible ? 'Hide labels' : 'Show labels' }}</button>
         </div>
         <app-live-map class="public-workspace-map" [viewport]="true" [visibleLayers]="publicMapLayers" [showLabels]="publicMapLabelsVisible" [focusRecord]="selectedPublicMapFocus" [refreshNonce]="mapRefreshNonce" (dataUpdated)="updatePublicMapData($event)" (incidentSelected)="openPublicIncident($event)"></app-live-map>
@@ -177,14 +178,29 @@
       <section class="public-page report-page">
         <div class="page-heading"><div><span class="eyebrow">COMMUNITY REPORTING</span><h1>Report a flood incident</h1><p>Your report will enter the local authority validation queue before appearing publicly.</p></div></div>
         @if (errorMessage) { <div class="connection-error">{{ errorMessage }}</div> }
-        <form class="report-form" (submit)="submitPublicReport($event, incidentType.value, severityLevel.value, description.value, reporterName.value, reporterContact.value, photos.files, reportLocationPicker)">
+        <form class="report-form" (submit)="submitPublicReport($event, incidentType.value, severityLevel.value, description.value, reporterName.value, reporterContact.value, cameraPhotos.files, photos.files, reportLocationPicker)">
           <div class="wide location-field"><span>Incident location</span><app-location-picker #reportLocationPicker locationLabel="incident" [includeLocationText]="true" [restrictToColacling]="true"></app-location-picker></div>
           <label class="wide">Incident type<select #incidentType required><option value="">Select incident type</option>@for (type of incidentTypes; track type) { <option [value]="type">{{ type }}</option> }</select></label>
           <label class="wide">Incident level<select #severityLevel required><option value="">Select incident level</option>@for (level of incidentLevels; track level) { <option [value]="level">{{ level }}</option> }</select></label>
           <label class="wide">Description <span class="optional">(optional)</span><textarea #description maxlength="2000" rows="5" placeholder="Describe the water level, affected roads, and immediate risks, if known."></textarea></label>
           <label>Reporter name <small>(optional)</small><input #reporterName /></label>
           <label>Contact information <small>(optional)</small><input #reporterContact /></label>
-          <label class="wide">Photos <small>JPEG or PNG, maximum 5 files at 5 MB each</small><input #photos type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" multiple /></label>
+          <div class="wide report-photo-field">
+            <span>Photos <small>JPEG or PNG, maximum 5 files at 5 MB each</small></span>
+            <div class="report-photo-options">
+              <label class="report-photo-option camera-option">
+                <input #cameraPhotos type="file" accept="image/jpeg,image/png" capture="environment" />
+                <span><b>Open camera</b><small>Take a photo using your device camera</small></span>
+              </label>
+              <label class="report-photo-option">
+                <input #photos type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" multiple />
+                <span><b>Choose photos</b><small>Select existing images from your device</small></span>
+              </label>
+            </div>
+            @if ((cameraPhotos.files?.length || 0) + (photos.files?.length || 0) > 0) {
+              <small class="report-photo-selection">{{ (cameraPhotos.files?.length || 0) + (photos.files?.length || 0) }} photo(s) selected</small>
+            }
+          </div>
           <button class="primary" type="submit" [disabled]="loading">{{ loading ? 'Submitting…' : 'Submit flood report' }}</button>
         </form>
         <div class="public-columns report-results">
@@ -232,7 +248,7 @@
   @if (menuOpen) { <button type="button" class="sidebar-backdrop" aria-label="Close navigation menu" (click)="menuOpen = false"></button> }
   <aside class="sidebar" [class.open]="menuOpen">
     <div class="brand">
-      <div class="brand-mark">BB</div>
+      <div class="brand-mark"><img src="barangay-colacling-seal.png" alt="Barangay Colacling seal" /></div>
       <div><strong>BantayBaha</strong><span>Barangay Colacling</span></div>
     </div>
     <nav aria-label="Administration">
@@ -277,7 +293,7 @@
     <section class="content">
       @if (errorMessage) { <div class="connection-error"><span>!</span>{{ errorMessage }}<button (click)="errorMessage = ''">×</button></div> }
       @if (successMessage) { <div class="admin-success"><span>✓</span>{{ successMessage }}<button (click)="successMessage = ''" aria-label="Dismiss success message">×</button></div> }
-      @if (loading) { <div class="loading-bar"><i></i></div> }
+      @if (loading) { <div class="loading-bar" role="status"><span class="mini-flood-icon" aria-hidden="true"><b>💧</b><i></i><i></i></span><strong>Loading flood information…</strong></div> }
       @if (activePage === 'dashboard') {
         <div class="page-heading">
           <div><span class="eyebrow">COMMAND CENTER</span><h1>Flood readiness overview</h1><p>Monitor community risk, residents, and active response operations.</p></div>
@@ -364,7 +380,7 @@
           } @else { <div class="table-feedback">No sent advisories yet.</div> }
         </article>
       } @else if (activePage === 'statistics') {
-        <app-dss></app-dss>
+        <app-dss [initialTab]="dssInitialTab" (navigate)="openDssMetric($event)"></app-dss>
       } @else {
         <div class="page-heading">
           <div><span class="eyebrow">{{ currentPage.eyebrow }}</span><h1>{{ currentPage.title }}</h1><p>{{ currentPage.description }}</p></div>
@@ -425,22 +441,22 @@
           <section class="resident-year-overview" aria-label="Resident summary for selected year">
             <div class="resident-year-heading"><div><span class="eyebrow">ANNUAL RESIDENT SNAPSHOT</span><h2>{{ selectedResidentYear }} resident records</h2><p>{{ isHistoricalResidentYear ? 'Historical snapshot. Later profile changes do not alter these records.' : 'Current-year snapshot synchronized with the live resident registry.' }}</p></div>@if (isHistoricalResidentYear) { <span class="snapshot-badge">Read-only</span> }</div>
             <div class="resident-summary-cards">
-              <article><span>Residents</span><b>{{ residentYearSummary.totalResidents }}</b><small>Registered people</small></article>
-              <article><span>Households</span><b>{{ residentYearSummary.totalHouseholds }}</b><small>Household records</small></article>
-              <article><span>Vulnerable</span><b>{{ residentYearSummary.vulnerableResidents }}</b><small>Residents with recorded needs</small></article>
-              <article><span>High priority</span><b>{{ residentYearSummary.highPriorityResidents }}</b><small>Priority level marked high</small></article>
+              <button type="button" (click)="openResidentSummary('residents')" [class.active]="!activeResourceFilterCount" aria-label="Show all resident records"><i class="resident-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></i><span>Residents</span><b>{{ residentYearSummary.totalResidents }}</b><small>Registered people</small><em aria-hidden="true">→</em></button>
+              <button type="button" (click)="openResidentSummary('households')" aria-label="Open household records"><i class="resident-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11 12 3l9 8M5 10v11h14V10M9 21v-6h6v6"/></svg></i><span>Households</span><b>{{ residentYearSummary.totalHouseholds }}</b><small>Household records</small><em aria-hidden="true">→</em></button>
+              <button type="button" (click)="openResidentSummary('vulnerable')" [class.active]="resourceFilters['vulnerable'] === 'true'" aria-label="Show vulnerable residents"><i class="resident-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z"/></svg></i><span>Vulnerable</span><b>{{ residentYearSummary.vulnerableResidents }}</b><small>Residents with recorded needs</small><em aria-hidden="true">→</em></button>
+              <button type="button" (click)="openResidentSummary('priority')" [class.active]="resourceFilters['priority'] === 'High'" aria-label="Show high-priority residents"><i class="resident-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5M12 18h.01"/></svg></i><span>High priority</span><b>{{ residentYearSummary.highPriorityResidents }}</b><small>Priority level marked high</small><em aria-hidden="true">→</em></button>
             </div>
             <div class="vulnerability-summary"><b>Vulnerability counts</b><span>Senior citizens <strong>{{ residentYearSummary.seniorCitizens }}</strong></span><span>Children <strong>{{ residentYearSummary.children }}</strong></span><span>Persons with disability <strong>{{ residentYearSummary.personsWithDisability }}</strong></span><span>Pregnant <strong>{{ residentYearSummary.pregnantResidents }}</strong></span><span>Morbidity <strong>{{ residentYearSummary.residentsWithMorbidity }}</strong></span></div>
           </section>
         }
-        <article class="panel workspace-panel">
+        <article class="panel workspace-panel" [class.notifications-workspace]="activePage === 'notifications'">
           @if (activePage === 'notifications') {
             <div class="resource-tabs"><button [class.active]="currentResource === 'notifications'" (click)="selectResource('notifications')">Advisories</button><button [class.active]="currentResource === 'emergency-contacts'" (click)="selectResource('emergency-contacts')">Emergency hotlines</button></div>
             @if (currentResource === 'emergency-contacts') {
               <div class="panel-head"><div><h2>Emergency hotlines</h2><p>Public, active hotlines appear in the public emergency contacts. Select a record to update it.</p></div><button type="button" class="primary" (click)="openEditor()">＋ Add emergency hotline</button></div>
             }
           }
-          <form class="toolbar" (submit)="searchResource($event, resourceSearch.value)"><label><span>⌕</span><input #resourceSearch placeholder="Search {{ currentPage.title.toLowerCase() }}..." /></label><button class="secondary" type="submit">Search</button></form>
+          <form class="toolbar" (submit)="searchResource($event, resourceSearch.value)"><label><span>⌕</span><input #resourceSearch placeholder="Search {{ currentResource === 'emergency-contacts' ? 'emergency hotlines' : currentPage.title.toLowerCase() }}..." /></label><button class="secondary" type="submit">Search</button></form>
           @if (activePage === 'evacuation') {
             <div class="resource-tabs"><button [class.active]="currentResource === 'shelters'" (click)="selectResource('shelters')">Shelters</button><button [class.active]="currentResource === 'residents'" (click)="selectResource('residents')">Residents</button><button [class.active]="currentResource === 'volunteers'" (click)="selectResource('volunteers')">Volunteers</button><button [class.active]="currentResource === 'emergency-contacts'" (click)="selectResource('emergency-contacts')">Emergency contacts</button></div>
             @if (currentResource === 'residents' && selectedEvacuationCenterName) { <div class="selected-center-banner"><span>Resident roster</span><b>{{ selectedEvacuationCenterName }}</b><button type="button" (click)="selectResource('residents')">Show all residents</button></div> }
@@ -473,25 +489,28 @@
               <button type="button" [class.active]="!allAdminMapLayersVisible && currentResource === 'risk-zones'" [attr.aria-pressed]="!allAdminMapLayersVisible && currentResource === 'risk-zones'" (click)="selectResource('risk-zones')"><i class="layer-symbol risk"></i>Risk zones</button>
               <button type="button" [class.active]="!allAdminMapLayersVisible && currentResource === 'shelters'" [attr.aria-pressed]="!allAdminMapLayersVisible && currentResource === 'shelters'" (click)="selectResource('shelters')"><i class="layer-symbol shelter-symbol" aria-hidden="true">⌂</i>Evacuation centers</button>
               <button type="button" [class.active]="!allAdminMapLayersVisible && currentResource === 'flood-reports'" [attr.aria-pressed]="!allAdminMapLayersVisible && currentResource === 'flood-reports'" (click)="selectResource('flood-reports')"><i class="layer-symbol report">!</i>Flood reports</button>
+              <button type="button" [class.active]="adminMapLayers.rivers" [attr.aria-pressed]="adminMapLayers.rivers" (click)="toggleAdminRivers()"><i class="layer-symbol river-symbol"></i>Rivers</button>
+              <button type="button" [class.active]="adminMapLayers.floodHazards" [attr.aria-pressed]="adminMapLayers.floodHazards" (click)="toggleAdminFloodHazards()"><i class="layer-symbol hazard-symbol"></i>Flood hazard</button>
               <button type="button" class="map-label-toggle" [class.active]="adminMapLabelsVisible" [attr.aria-pressed]="adminMapLabelsVisible" (click)="toggleAdminMapLabels()" [attr.aria-label]="adminMapLabelsVisible ? 'Hide map labels' : 'Show map labels'"><i aria-hidden="true">Aa</i>{{ adminMapLabelsVisible ? 'Hide labels' : 'Show labels' }}</button>
             </div>
           }
           @if (activePage === 'map') {
-            <app-live-map [full]="true" [visibleLayers]="adminMapLayers" [showLabels]="adminMapLabelsVisible" [focusRecord]="selectedMapFocus" [refreshNonce]="mapRefreshNonce" (incidentSelected)="openPublicIncident($event)"></app-live-map>
-            <div class="data-table map-records">
+            <app-live-map [full]="true" [visibleLayers]="adminMapLayers" [showLabels]="adminMapLabelsVisible" [focusRecord]="selectedMapFocus" [refreshNonce]="mapRefreshNonce" (incidentSelected)="openPublicIncident($event)" (hazardSelected)="openHazardDss()"></app-live-map>
+            <div class="data-table map-records" [class.zone-table]="currentResource === 'barangay-zones' || currentResource === 'risk-zones'">
               <div class="table-head">@for (column of tableSortColumns; track column.label) { @if (column.label === 'DETAILS') { <span>{{ column.label }}</span> } @else { <button type="button" (click)="sortColumn(column.field)" [attr.aria-label]="'Sort by ' + column.label">{{ column.label }} <i>{{ sortIndicator(column.field) }}</i></button> } }<span></span></div>
               @if (loading) { <div class="table-feedback">Loading {{ currentResource === 'barangay-zones' ? 'barangay zones' : currentResource === 'risk-zones' ? 'risk zones' : currentResource === 'flood-reports' ? 'flood reports' : 'evacuation centers' }}…</div> }
               @else if (!tableRows.length) { <div class="table-feedback">No records found for this map layer.</div> }
               @for (row of tableRows; track row.id) {
                 <div class="table-row map-table-row" role="button" tabindex="0" [class.selected]="selectedMapFocus?.id === row.id" (click)="focusMapRecord(row)" (keydown.enter)="focusMapRecord(row)">
                   <span><b>{{ row.name }}</b><small>{{ row.id }}</small></span><span>{{ row.detail }}</span>@if (currentResource !== 'barangay-zones' && currentResource !== 'risk-zones') { <span><b class="status validated">{{ row.status }}</b></span> }<span>{{ row.updated }}</span>
-                  @if (canManageCurrentResource) { <button type="button" (click)="$event.stopPropagation(); openEditor(row)" aria-label="Edit map record">Edit</button> } @else { <span></span> }
+                  @if (canManageCurrentResource && (currentResource === 'barangay-zones' || currentResource === 'risk-zones')) { <span class="record-actions"><button type="button" (click)="$event.stopPropagation(); openEditor(row)" aria-label="Edit zone">Edit</button><button type="button" class="record-delete" [disabled]="loading" (click)="$event.stopPropagation(); deleteZone(row.id)" [attr.aria-label]="'Delete ' + row.name" title="Delete zone"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m5 4v6m4-6v6"/></svg></button></span> }
+                  @else if (canManageCurrentResource) { <button type="button" (click)="$event.stopPropagation(); openEditor(row)" aria-label="Edit map record">Edit</button> } @else { <span></span> }
                 </div>
               }
             </div>
             <div class="pagination"><span>Page {{ page }} of {{ totalPages }} · {{ totalItems }} records</span><div><button [disabled]="page <= 1" (click)="changePage(page - 1)">‹</button><button class="active">{{ page }}</button><button [disabled]="page >= totalPages" (click)="changePage(page + 1)">›</button></div></div>
           } @else {
-            <div class="data-table" [class.hotline-table]="currentResource === 'emergency-contacts'" [class.flood-report-table]="activePage === 'reports'">
+            <div class="data-table" [class.hotline-table]="currentResource === 'emergency-contacts'" [class.flood-report-table]="activePage === 'reports'" [class.shelter-table]="activePage === 'evacuation' && currentResource === 'shelters'">
               <div class="table-head">@for (column of tableSortColumns; track column.label) { @if (column.label === 'DETAILS') { <span>{{ column.label }}</span> } @else { <button type="button" (click)="sortColumn(column.field)" [attr.aria-label]="'Sort by ' + column.label">{{ column.label }} <i>{{ sortIndicator(column.field) }}</i></button> } }<span></span></div>
               @if (loading) { <div class="table-feedback">Loading records…</div> }
               @else if (!tableRows.length) { <div class="table-feedback">{{ activePage === 'residents' ? 'No resident records exist for ' + selectedResidentYear + '.' : 'No records found.' }}</div> }
@@ -506,10 +525,12 @@
                   </div>
                 } @else {
                 <div class="table-row" [class.map-table-row]="activePage === 'evacuation' && currentResource === 'shelters'" (click)="activePage === 'evacuation' && currentResource === 'shelters' && focusMapRecord(row)">
-                  <span><b>{{ row.name }}</b><small>{{ row.id }}</small></span><span>{{ row.detail }}</span><span><b class="status validated">{{ row.status }}</b></span><span>{{ row.updated }}</span>
+                  <span><b>{{ row.name }}</b><small>{{ row.id }}</small></span><span>{{ row.detail }}</span>@if (activePage === 'residents' && resourceFilters['priority'] === 'High') { <span class="priority-reason"><b>{{ row.priorityReason }}</b></span><span><b class="status validated">{{ row.status }}</b></span> } @else if (activePage === 'residents' && resourceFilters['vulnerable'] === 'true') { <span class="priority-reason vulnerable-reason"><b>{{ row.vulnerabilityReason }}</b></span><span><b class="status validated">{{ row.status }}</b></span> } @else { <span><b class="status validated">{{ row.status }}</b></span><span>{{ row.updated }}</span> }
                   @if (canManageCurrentResource && currentResource === 'emergency-contacts') {
                     <span class="hotline-actions"><button type="button" [disabled]="loading" (click)="$event.stopPropagation(); openEditor(row)" [attr.aria-label]="'Edit ' + row.name">Edit</button><button type="button" class="hotline-delete" [disabled]="loading" (click)="$event.stopPropagation(); deleteEmergencyHotline(row.id)" [attr.aria-label]="'Delete ' + row.name">Delete</button></span>
                   } @else if (activePage === 'evacuation' && currentResource === 'residents' && row.status === 'Evacuated') { <button type="button" (click)="$event.stopPropagation(); returnResidentHome(row)">Returned Home</button> }
+                  @else if (canManageCurrentResource && activePage === 'evacuation' && currentResource === 'shelters') { <span class="record-actions"><button type="button" (click)="$event.stopPropagation(); openEditor(row)" aria-label="Edit evacuation center">Edit</button><button type="button" class="record-delete" [disabled]="loading" (click)="$event.stopPropagation(); deleteEvacuationRecord(row.id)" [attr.aria-label]="'Delete ' + row.name" title="Delete evacuation center"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m5 4v6m4-6v6"/></svg></button></span> }
+                  @else if (canManageCurrentResource && (activePage === 'residents' || activePage === 'households') && !(activePage === 'residents' && isHistoricalResidentYear)) { <span class="record-actions"><button type="button" (click)="$event.stopPropagation(); openEditor(row)" [attr.aria-label]="'Edit ' + row.name">Edit</button><button type="button" class="record-delete" [disabled]="loading" (click)="$event.stopPropagation(); deleteCommunityRecord(row)" [attr.aria-label]="'Delete ' + row.name" [title]="activePage === 'residents' ? 'Delete resident' : 'Delete household'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m5 4v6m4-6v6"/></svg></button></span> }
                   @else if (canManageCurrentResource && !(activePage === 'residents' && isHistoricalResidentYear)) { <button type="button" (click)="$event.stopPropagation(); openEditor(row)" aria-label="Edit or review">Edit</button> } @else { <span></span> }
                 </div>
                 }
@@ -599,14 +620,8 @@
             <label class="wide">Photos <small>JPEG or PNG, maximum 5 files at 5 MB each</small><input name="photos" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" multiple /></label>
           }
           <div class="modal-actions">
-            @if (activePage === 'map' && (currentResource === 'barangay-zones' || currentResource === 'risk-zones') && editorId) {
-              <button type="button" class="danger-button" (click)="deleteSelectedZone()" [disabled]="loading">Delete zone</button>
-            }
             @if (currentResource === 'emergency-contacts' && editorId && canManageCurrentResource) {
               <button type="button" class="danger-button" (click)="deleteEmergencyHotline(editorId)" [disabled]="loading">Delete hotline</button>
-            }
-            @if (activePage === 'evacuation' && currentResource !== 'emergency-contacts' && editorId && canManageCurrentResource) {
-              <button type="button" class="danger-button" (click)="deleteSelectedEvacuationRecord()" [disabled]="loading">Delete record</button>
             }
             @if (activePage === 'residents' && editorId && canManageCurrentResource) {
               <button type="button" class="danger-button" (click)="deleteSelectedResident()" [disabled]="loading">Delete resident</button>

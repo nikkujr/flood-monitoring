@@ -101,16 +101,17 @@ export class App implements OnInit, OnDestroy {
   publicMapData: Record<string, any> = { zones: [], shelters: [], riskZones: [] };
   weather?: WeatherData;
   existingBarangayZones: Array<Record<string, unknown>> = [];
-  publicMapLayers = { barangayZones: true, shelters: true, riskZones: true, incidents: true, routes: false };
+  publicMapLayers = { barangayZones: true, shelters: true, riskZones: true, incidents: true, routes: false, rivers: true, floodHazards: true };
   publicMapLabelsVisible = false;
-  adminMapLayers = { barangayZones: true, shelters: false, riskZones: false, incidents: false, routes: false };
+  adminMapLayers = { barangayZones: true, shelters: false, riskZones: false, incidents: false, routes: false, rivers: true, floodHazards: true };
   adminMapLabelsVisible = false;
-  readonly evacuationMapLayers = { barangayZones: true, shelters: true, riskZones: false, incidents: false, routes: true };
+  readonly evacuationMapLayers = { barangayZones: true, shelters: true, riskZones: false, incidents: false, routes: true, rivers: true, floodHazards: true };
   publicMapSections = { barangayZones: true, shelters: false, riskZones: false, incidents: false, announcements: false };
   readonly incidentTypes = ['River Flooding', 'Flash Flood', 'Road Flooding', 'Drainage Overflow', 'Rising Water', 'Other'];
   readonly incidentLevels = ['Information', 'Minor Incident', 'Major Incident'];
   selectedPublicMapFocus?: { id: string; resource: string; record: Record<string, unknown>; nonce: number };
   selectedPublicIncident?: Record<string, unknown>;
+  dssInitialTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology' = 'overview';
   viewingAdminIncident = false;
   today = new Intl.DateTimeFormat('en-PH', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date());
   readonly liveNow = signal(new Date());
@@ -171,7 +172,7 @@ export class App implements OnInit, OnDestroy {
   assignmentAt = '';
   assignmentEvacuationStatus: 'Safe' | 'For Monitoring' | 'For Evacuation' | 'Evacuated' = 'Evacuated';
 
-  tableRows = [
+  tableRows: Array<{ name: string; id: string; detail: string; priorityReason?: string; vulnerabilityReason?: string; status: string; updated: string }> = [
     { name: 'Riverside Zone', id: 'ZONE-001', detail: 'Purok 1 · High-risk area', status: 'Active', updated: '8 min ago' },
     { name: 'Colacling Elementary School', id: 'SH-001', detail: 'Capacity 200 · 54 occupied', status: 'Available', updated: '21 min ago' },
     { name: 'Station 1 – Spillway', id: 'ST-001', detail: '1.25 m · Monitoring', status: 'Online', updated: '6 min ago' },
@@ -196,6 +197,22 @@ export class App implements OnInit, OnDestroy {
       notifications: [{ label: 'RECORD', field: 'title' }, { label: 'DETAILS', field: 'type' }, { label: 'STATUS', field: 'status' }, { label: 'UPDATED', field: 'updated_at' }],
       statistics: [{ label: 'RECORD', field: 'name' }, { label: 'DETAILS', field: 'detail' }, { label: 'STATUS', field: 'status' }, { label: 'UPDATED', field: 'updated' }]
     };
+    if (this.activePage === 'residents' && this.currentResource === 'residents' && this.resourceFilters['priority'] === 'High') {
+      return [
+        { label: 'NAME', field: 'r.full_name' },
+        { label: 'LOCATION', field: 'r.address_line' },
+        { label: 'WHY HIGH PRIORITY', field: 'r.priority_level' },
+        { label: 'STATUS', field: 'r.evacuation_status' }
+      ];
+    }
+    if (this.activePage === 'residents' && this.currentResource === 'residents' && this.resourceFilters['vulnerable'] === 'true') {
+      return [
+        { label: 'NAME', field: 'r.full_name' },
+        { label: 'LOCATION', field: 'r.address_line' },
+        { label: 'WHY VULNERABLE', field: 'r.priority_level' },
+        { label: 'STATUS', field: 'r.evacuation_status' }
+      ];
+    }
     return columns[this.currentResource] ?? [
       { label: 'RECORD', field: 'created_at' }, { label: 'DETAILS', field: 'created_at' },
       { label: 'STATUS', field: 'created_at' }, { label: 'UPDATED', field: 'created_at' }
@@ -263,7 +280,8 @@ export class App implements OnInit, OnDestroy {
         { name: 'fullName', label: 'Full name', required: true }, { name: 'username', label: 'Username', required: true },
         { name: 'email', label: 'Email', type: 'email', required: true },
         { name: 'role', label: 'Role', type: 'select', required: true, options: options('Super Admin', 'Disaster Officer', 'Data Encoder') },
-        { name: 'password', label: 'Initial password', type: 'password', required: !this.editorId }
+        { name: 'password', label: this.editorId ? 'New password (leave blank to keep current)' : 'Initial password', type: 'password', required: !this.editorId,
+          placeholder: '12+ characters with uppercase, lowercase, and number' }
       ],
       residents: [
         { name: 'householdId', label: 'Household', type: 'household-lookup', required: true, options: this.householdOptions },
@@ -399,20 +417,45 @@ export class App implements OnInit, OnDestroy {
     }).format(this.liveNow());
   }
 
-  login(username: string, password: string) {
+  login(event: Event, username: string, password: string) {
+    event.preventDefault();
     this.errorMessage = '';
+    this.fieldErrors = {};
+    const form = event.currentTarget as HTMLFormElement;
+    const cleanUsername = username.trim();
+    if (!cleanUsername) this.fieldErrors['username'] = 'Enter your username.';
+    if (!password) this.fieldErrors['password'] = 'Enter your password.';
+    if (Object.keys(this.fieldErrors).length) {
+      this.focusEditorField(form, Object.keys(this.fieldErrors)[0]!);
+      return;
+    }
     this.loginLoading = true;
-    this.api.login(username, password).pipe(finalize(() => this.finishLoginLoading())).subscribe({
+    this.api.login(cleanUsername, password).pipe(finalize(() => this.finishLoginLoading())).subscribe({
       next: ({ user }) => { if (!user.mustChangePassword) this.setPage(this.requestedAdminPage ?? 'dashboard'); },
-      error: (error) => this.errorMessage = error?.error?.message ?? 'Unable to connect to the BantayBaha API.'
+      error: (error) => {
+        const fields = error?.error?.fieldErrors;
+        if (fields && typeof fields === 'object' && Object.keys(fields).length) {
+          this.fieldErrors = fields;
+          this.focusEditorField(form, Object.keys(fields)[0]!);
+        } else this.errorMessage = error?.error?.message ?? 'Unable to connect to the BantayBaha API.';
+      }
     });
   }
 
   requestRecovery(event: Event, email: string) {
     event.preventDefault();
     this.errorMessage = '';
+    this.fieldErrors = {};
+    const form = event.currentTarget as HTMLFormElement;
+    const cleanEmail = email.trim();
+    if (!cleanEmail) this.fieldErrors['email'] = 'Enter your registered email address.';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) this.fieldErrors['email'] = 'Enter a valid email address.';
+    if (Object.keys(this.fieldErrors).length) {
+      this.focusEditorField(form, 'email');
+      return;
+    }
     this.loginLoading = true;
-    this.api.forgotPassword(email).pipe(finalize(() => this.finishLoginLoading())).subscribe({
+    this.api.forgotPassword(cleanEmail).pipe(finalize(() => this.finishLoginLoading())).subscribe({
       next: (value) => this.successMessage = value.message,
       error: (error) => this.errorMessage = error?.error?.message ?? 'Password recovery could not be completed.'
     });
@@ -421,6 +464,13 @@ export class App implements OnInit, OnDestroy {
   performReset(event: Event, password: string) {
     event.preventDefault();
     this.errorMessage = '';
+    this.fieldErrors = {};
+    const form = event.currentTarget as HTMLFormElement;
+    if (password.length < 12 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password)) {
+      this.fieldErrors['password'] = 'Use at least 12 characters with uppercase, lowercase, and a number.';
+      this.focusEditorField(form, 'password');
+      return;
+    }
     this.loginLoading = true;
     this.api.resetPassword(this.resetToken, password).pipe(finalize(() => this.finishLoginLoading())).subscribe({
       next: () => {
@@ -528,18 +578,20 @@ export class App implements OnInit, OnDestroy {
       riskZones: layer === 'riskZones',
       shelters: layer === 'shelters',
       incidents: layer === 'incidents',
-      routes: false
+      routes: false,
+      rivers: this.publicMapLayers.rivers,
+      floodHazards: this.publicMapLayers.floodHazards
     };
   }
 
   showAllPublicMapLayers() {
     this.selectedPublicMapFocus = undefined;
-    this.publicMapLayers = { barangayZones: true, riskZones: true, shelters: true, incidents: true, routes: false };
+    this.publicMapLayers = { barangayZones: true, riskZones: true, shelters: true, incidents: true, routes: false, rivers: true, floodHazards: true };
   }
 
   get allPublicMapLayersVisible() {
     return this.publicMapLayers.barangayZones && this.publicMapLayers.riskZones
-      && this.publicMapLayers.shelters && this.publicMapLayers.incidents;
+      && this.publicMapLayers.shelters && this.publicMapLayers.incidents && this.publicMapLayers.rivers && this.publicMapLayers.floodHazards;
   }
 
   togglePublicMapLabels() {
@@ -601,7 +653,7 @@ export class App implements OnInit, OnDestroy {
     this.selectedPublicIncident = undefined;
   }
 
-  submitPublicReport(event: Event, incidentType: string, severityLevel: string, description: string, reporterName: string, reporterContact: string, photos: FileList | null, locationPicker: LocationPickerComponent) {
+  submitPublicReport(event: Event, incidentType: string, severityLevel: string, description: string, reporterName: string, reporterContact: string, cameraPhotos: FileList | null, uploadedPhotos: FileList | null, locationPicker: LocationPickerComponent) {
     event.preventDefault();
     this.errorMessage = '';
     this.successMessage = '';
@@ -614,7 +666,7 @@ export class App implements OnInit, OnDestroy {
       this.errorMessage = 'Pin the flood incident location on the map.';
       return;
     }
-    const selectedPhotos = Array.from(photos ?? []);
+    const selectedPhotos = [...Array.from(cameraPhotos ?? []), ...Array.from(uploadedPhotos ?? [])];
     if (selectedPhotos.length > 5) {
       this.errorMessage = 'You can attach a maximum of 5 photos.';
       return;
@@ -801,6 +853,23 @@ export class App implements OnInit, OnDestroy {
     this.loadResource();
   }
 
+  openDssMetric(target: { page: string; resource?: string; filters?: Record<string, string> }) {
+    const page = target.page as PageId;
+    if (!this.canOpenDashboardMetric(page)) return;
+    this.setPage(page);
+    if (target.resource) this.selectResource(target.resource);
+    if (target.filters) {
+      this.resourceFilters = { ...target.filters };
+      this.page = 1;
+      this.loadResource();
+    }
+  }
+
+  openHazardDss() {
+    this.dssInitialTab = 'zones';
+    this.setPage('statistics');
+  }
+
   setPage(page: PageId, updateHistory = true) {
     this.headerNotificationsOpen = false;
     this.activePage = page;
@@ -868,7 +937,9 @@ export class App implements OnInit, OnDestroy {
       riskZones: resource === 'risk-zones',
       shelters: resource === 'shelters',
       incidents: resource === 'flood-reports',
-      routes: false
+      routes: false,
+      rivers: this.adminMapLayers.rivers,
+      floodHazards: this.adminMapLayers.floodHazards
     };
   }
 
@@ -879,7 +950,9 @@ export class App implements OnInit, OnDestroy {
       riskZones: true,
       shelters: true,
       incidents: true,
-      routes: false
+      routes: false,
+      rivers: true,
+      floodHazards: true
     };
   }
 
@@ -887,8 +960,11 @@ export class App implements OnInit, OnDestroy {
     return this.adminMapLayers.barangayZones
       && this.adminMapLayers.riskZones
       && this.adminMapLayers.shelters
-      && this.adminMapLayers.incidents;
+      && this.adminMapLayers.incidents && this.adminMapLayers.rivers && this.adminMapLayers.floodHazards;
   }
+
+  toggleAdminRivers() { this.adminMapLayers = { ...this.adminMapLayers, rivers: !this.adminMapLayers.rivers }; }
+  toggleAdminFloodHazards() { this.adminMapLayers = { ...this.adminMapLayers, floodHazards: !this.adminMapLayers.floodHazards }; }
 
   toggleAdminMapLabels() {
     this.adminMapLabelsVisible = !this.adminMapLabelsVisible;
@@ -1026,6 +1102,21 @@ export class App implements OnInit, OnDestroy {
     this.resourceFilters = vulnerability === 'Any'
       ? { zone, household, vulnerable: 'true', status, priority }
       : { zone, household, vulnerability, status, priority };
+    this.page = 1;
+    this.loadResource();
+  }
+
+  openResidentSummary(kind: 'residents' | 'households' | 'vulnerable' | 'priority') {
+    if (kind === 'households') {
+      this.setPage('households');
+      return;
+    }
+    this.currentResource = 'residents';
+    this.resourceFilters = kind === 'vulnerable'
+      ? { vulnerable: 'true' }
+      : kind === 'priority'
+        ? { priority: 'High' }
+        : {};
     this.page = 1;
     this.loadResource();
   }
@@ -1292,8 +1383,9 @@ export class App implements OnInit, OnDestroy {
     });
   }
 
-  deleteSelectedEvacuationRecord() {
-    if (this.activePage !== 'evacuation' || !this.editorId || !this.canManageCurrentResource || this.loading) return;
+  deleteEvacuationRecord(id: string) {
+    if (this.activePage !== 'evacuation' || !id || !this.canManageCurrentResource || this.loading) return;
+    const record = this.rawRecords.get(id);
     const labels: Record<string, string> = {
       shelters: 'shelter',
       volunteers: 'volunteer',
@@ -1301,15 +1393,22 @@ export class App implements OnInit, OnDestroy {
       'emergency-contacts': 'emergency contact'
     };
     const label = labels[this.currentResource] ?? 'record';
-    if (!window.confirm(`Delete this ${label}? This action cannot be undone.`)) return;
+    const name = String(record?.['shelter_name'] ?? record?.['full_name'] ?? record?.['route_name'] ?? `this ${label}`);
+    const warning = this.currentResource === 'shelters'
+      ? ' Assigned residents will be returned to the For Evacuation list, and routes ending at this center will be removed.'
+      : '';
+    if (!window.confirm(`Delete ${name}?${warning} This action cannot be undone.`)) return;
+    this.errorMessage = '';
+    this.successMessage = '';
     this.loading = true;
-    this.api.delete(this.currentResource, this.editorId).pipe(finalize(() => this.finishLoading())).subscribe({
+    this.api.delete(this.currentResource, id).pipe(finalize(() => this.finishLoading())).subscribe({
       next: () => {
         this.selectedMapFocus = undefined;
         this.mapRefreshNonce++;
-        this.closeEditor();
+        if (this.editorOpen && this.editorId === id) this.closeEditor();
         this.successMessage = `${label[0]!.toUpperCase()}${label.slice(1)} deleted successfully.`;
         this.loadResource();
+        if (this.currentResource === 'shelters') this.loadEvacuationCenters();
       },
       error: (error) => this.errorMessage = error?.error?.message ?? `The ${label} could not be deleted.`
     });
@@ -1327,6 +1426,24 @@ export class App implements OnInit, OnDestroy {
         this.loadResource();
       },
       error: (error) => this.errorMessage = error?.error?.message ?? 'The resident could not be deleted.'
+    });
+  }
+
+  deleteCommunityRecord(row: { id: string; name: string }) {
+    if (!row.id || !['residents', 'households'].includes(this.currentResource) || !this.canManageCurrentResource || this.loading) return;
+    const label = this.currentResource === 'residents' ? 'resident' : 'household';
+    const householdWarning = this.currentResource === 'households' ? ' A household with resident records cannot be deleted.' : '';
+    if (!window.confirm(`Delete ${label} ${row.name}?${householdWarning} This action cannot be undone.`)) return;
+    this.errorMessage = '';
+    this.successMessage = '';
+    this.loading = true;
+    this.api.delete(this.currentResource, row.id).pipe(finalize(() => this.finishLoading())).subscribe({
+      next: () => {
+        this.successMessage = `${label[0]!.toUpperCase()}${label.slice(1)} deleted successfully.`;
+        this.loadResource();
+        if (this.currentResource === 'households') this.loadHouseholdOptions();
+      },
+      error: (error) => this.errorMessage = error?.error?.message ?? `The ${label} could not be deleted.`
     });
   }
 
@@ -1403,11 +1520,27 @@ export class App implements OnInit, OnDestroy {
     this.fieldErrors = {};
     const formData = new FormData(form);
     const raw = Object.fromEntries(formData.entries()) as Record<string, unknown>;
-    for (const field of this.currentResource === 'residents' ? ['contactNumber', 'emergencyContactNumber'] : this.currentResource === 'households' ? ['contactNumber'] : []) {
-      if (raw[field] !== undefined && !validPhilippineContactNumber(raw[field])) {
-        this.fieldErrors[field] = 'Enter a valid Philippine mobile or landline number.';
+    for (const field of this.editorFields) {
+      if (typeof raw[field.name] === 'string') raw[field.name] = String(raw[field.name]).trim();
+      if (field.required && !['location', 'polygon', 'household-lookup', 'multiselect'].includes(field.type ?? '') && !raw[field.name]) {
+        this.fieldErrors[field.name] = `${field.label} is required.`;
+      }
+      if (field.type === 'email' && raw[field.name] && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(raw[field.name]))) {
+        this.fieldErrors[field.name] = 'Enter a valid email address.';
+      }
+      if (field.type === 'tel' && raw[field.name] && !validPhilippineContactNumber(raw[field.name])) {
+        this.fieldErrors[field.name] = 'Enter a valid Philippine mobile or landline number.';
+      }
+      if (field.type === 'number' && raw[field.name] !== '' && (!Number.isFinite(Number(raw[field.name])) || Number(raw[field.name]) < 0)) {
+        this.fieldErrors[field.name] = `${field.label} must be zero or greater.`;
+      }
+      if (field.type === 'password' && raw[field.name] && (String(raw[field.name]).length < 12 || !/[A-Z]/.test(String(raw[field.name])) || !/[a-z]/.test(String(raw[field.name])) || !/\d/.test(String(raw[field.name])))) {
+        this.fieldErrors[field.name] = 'Use at least 12 characters with uppercase, lowercase, and a number.';
       }
     }
+    if (raw['dateOfBirth'] && new Date(String(raw['dateOfBirth'])) > new Date()) this.fieldErrors['dateOfBirth'] = 'Date of birth cannot be in the future.';
+    if (raw['vulnerabilityType'] === 'Other' && !String(raw['vulnerabilityOther'] ?? '').trim()) this.fieldErrors['vulnerabilityType'] = 'Specify the other vulnerability.';
+    if (raw['relationshipToHead'] === 'Other' && !String(raw['relationshipOther'] ?? '').trim()) this.fieldErrors['relationshipToHead'] = 'Specify the relationship to the household head.';
     if (Object.keys(this.fieldErrors).length) {
       this.focusEditorField(form, Object.keys(this.fieldErrors)[0]!);
       return;
@@ -1666,23 +1799,28 @@ export class App implements OnInit, OnDestroy {
     this.changeDetector.detectChanges();
   }
 
-  deleteSelectedZone() {
-    if (!this.editorId || !['barangay-zones', 'risk-zones'].includes(this.currentResource) || this.api.user()?.role !== 'Super Admin') return;
+  deleteZone(id: string) {
+    if (!id || !['barangay-zones', 'risk-zones'].includes(this.currentResource) || this.api.user()?.role !== 'Super Admin' || this.loading) return;
     const isRiskZone = this.currentResource === 'risk-zones';
-    const zoneName = String(this.editorValues[isRiskZone ? 'riskZoneName' : 'zoneName'] ?? `this ${isRiskZone ? 'risk' : 'barangay'} zone`);
-    if (!window.confirm(`Delete ${zoneName}? This cannot be undone.`)) return;
+    const record = this.rawRecords.get(id);
+    const zoneName = String(record?.[isRiskZone ? 'risk_zone_name' : 'zone_name'] ?? `this ${isRiskZone ? 'risk' : 'barangay'} zone`);
+    const warning = isRiskZone ? '' : ' Linked report and notification tags will be removed. Evacuation routes beginning in this zone will also be removed.';
+    if (!window.confirm(`Delete ${zoneName}?${warning} This cannot be undone.`)) return;
     this.loading = true;
     this.errorMessage = '';
     this.successMessage = '';
-    this.api.delete(this.currentResource, this.editorId).pipe(finalize(() => this.finishLoading())).subscribe({
+    this.api.delete(this.currentResource, id).pipe(finalize(() => this.finishLoading())).subscribe({
       next: () => {
         this.selectedMapFocus = undefined;
         this.mapRefreshNonce++;
-        this.closeEditor();
+        if (this.editorOpen && this.editorId === id) this.closeEditor();
         this.successMessage = `${isRiskZone ? 'Risk' : 'Barangay'} zone deleted successfully.`;
         this.loadResource();
       },
-      error: (error) => this.errorMessage = error?.error?.message ?? 'The barangay zone could not be deleted.'
+      error: (error) => {
+        this.errorMessage = error?.error?.message ?? 'The barangay zone could not be deleted.';
+        window.alert(this.errorMessage);
+      }
     });
   }
 
@@ -1800,9 +1938,33 @@ export class App implements OnInit, OnDestroy {
                 : row['resident_id']
                   ? `${row['household_number'] ?? 'No household'} · ${row['zone_name'] ?? 'No zone'} · ${row['household_address'] ?? row['address_line'] ?? 'No address'}`
                   : String(row['email'] ?? row['address_line'] ?? row['message'] ?? (row['location_text'] ? this.displayLocation(row['location_text']) : values[2]) ?? ''),
+      priorityReason: row['resident_id'] ? this.residentPriorityReason(row, true) : '',
+      vulnerabilityReason: row['resident_id'] ? this.residentPriorityReason(row, false) : '',
       status: String(row['record_status'] ?? row['verification_status'] ?? row['availability_status'] ?? row['status'] ?? row['risk_level'] ?? row['role'] ?? (row['is_active'] ? 'Active' : 'Inactive')),
       updated: this.formatDate(row['source_updated_at'] ?? row['updated_at'] ?? row['source_created_at'] ?? row['created_at'])
     };
+  }
+
+  private residentPriorityReason(row: Record<string, unknown>, includeAssistanceFactors: boolean) {
+    const reasons = new Set<string>();
+    const age = Number(row['age']);
+    const meaningful = (value: unknown) => {
+      const text = String(value ?? '').trim();
+      return text && !['NO', 'N/A', 'NONE'].includes(text.toUpperCase()) ? text : '';
+    };
+    if (Number.isFinite(age) && age >= 60) reasons.add('Senior citizen');
+    if (Number.isFinite(age) && age < 18) reasons.add('Child');
+    const vulnerability = meaningful(row['vulnerability_type']);
+    if (vulnerability) reasons.add(vulnerability === 'Elderly' ? 'Senior citizen' : vulnerability);
+    const vulnerabilityOther = meaningful(row['vulnerability_other']);
+    if (vulnerabilityOther) reasons.add(vulnerabilityOther);
+    const disability = meaningful(row['pwd_specify']);
+    if (disability) reasons.add(`Disability: ${disability}`);
+    const morbidity = meaningful(row['morbidity']);
+    if (morbidity) reasons.add(`Morbidity: ${morbidity}`);
+    if (includeAssistanceFactors && String(row['can_swim'] ?? '').trim().toLowerCase() === 'no') reasons.add('Cannot swim');
+    if (includeAssistanceFactors && String(row['house_type'] ?? '').trim().toLowerCase() === 'light materials') reasons.add('Light-material house');
+    return reasons.size ? [...reasons].join(' · ') : includeAssistanceFactors ? 'Manually marked High priority' : 'Recorded as vulnerable';
   }
 
   private formatDate(value: unknown) {

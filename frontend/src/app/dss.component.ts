@@ -1,4 +1,4 @@
-import { ChangeDetectorRef, Component, OnDestroy, OnInit, inject } from '@angular/core';
+import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { BehaviorSubject, Subscription, catchError, combineLatest, finalize, of, switchMap, timer } from 'rxjs';
@@ -11,6 +11,8 @@ const emptyFilters = (): Record<string,string> => ({
 
 @Component({selector:'app-dss',standalone:true,imports:[FormsModule,DatePipe],templateUrl:'./dss.component.html',styleUrl:'./dss.component.scss'})
 export class DssComponent implements OnInit, OnDestroy {
+  @Output() navigate = new EventEmitter<{ page: string; resource?: string; filters?: Record<string, string> }>();
+  @Input() initialTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology' = 'overview';
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly refresh = new BehaviorSubject(0);
@@ -50,6 +52,7 @@ export class DssComponent implements OnInit, OnDestroy {
   readonly geoAnalyticsChart = 'conic-gradient(#e5e7eb 0 72%, #d9c8ff 72% 87.4%, #a946ed 87.4% 94.4%, #5d16e8 94.4% 100%)';
   pages: Record<string,number> = {vulnerable:1,evacuation:1,households:1};
   ngOnInit() {
+    this.activeTab = this.initialTab;
     this.subscription = combineLatest([timer(0,30_000),this.refresh]).pipe(switchMap(()=>{
       if (this.filters['from'] && this.filters['to'] && this.filters['from']>this.filters['to']) {
         this.loading=false;this.error='Start date must not be after end date.';return of(null);
@@ -96,16 +99,18 @@ export class DssComponent implements OnInit, OnDestroy {
     return Math.max(1,Math.ceil((total??0)/20));
   }
   movePage(kind:string,delta:number) {this.pages[kind]=Math.max(1,Math.min(this.pageCount(kind),this.pages[kind]!+delta));}
-  get metrics() {
+  get metrics(): Array<{label:string;value:number;icon:string;page:string;resource?:string;filters?:Record<string,string>}> {
     if (!this.data) return [];
     const m=this.data.metrics;
     return [
-      {label:'Active validated reports',value:m.activeReports,icon:'!'},
-      {label:'Affected zones',value:m.affectedZones,icon:'⌖'},
-      {label:'Residents needing assistance',value:m.priorityResidents,icon:'♙'},
-      {label:'Potentially affected vulnerable',value:m.affectedVulnerable,icon:'♡'}
+      {label:'Active validated reports',value:m.activeReports,icon:'!',page:'reports',filters:{status:'Validated'}},
+      {label:'Affected zones',value:m.affectedZones,icon:'⌖',page:'map'},
+      {label:'Residents needing assistance',value:m.priorityResidents,icon:'♙',page:'evacuation',resource:'residents'},
+      {label:'Potentially affected vulnerable',value:m.affectedVulnerable,icon:'♡',page:'residents',filters:{vulnerable:'true'}}
     ];
   }
+  openMetric(metric: {page:string;resource?:string;filters?:Record<string,string>}) {this.navigate.emit(metric);}
+  openHazardMap() {this.navigate.emit({page:'map'});}
   get reportStatuses() {
     if (!this.data) return [];
     const incidents=this.data.incidents;
