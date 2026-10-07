@@ -17,6 +17,7 @@ export const riskRules = [
   'Repeated incidents means at least two Validated or Resolved report records in a zone in the selected period; records may describe the same event.',
   'Vulnerability includes age 60 or above, age under 18, recorded disability, pregnancy, mobility limitation, other recorded vulnerability, or recorded morbidity. Ages are calculated as of today.',
   'Vulnerable residents: Critical → Highest, High → High, Moderate → Medium, Low → Lower. Non-vulnerable residents: Critical → High, High → Medium, otherwise Lower. A manually recorded High priority raises active-zone priority to at least High.',
+  'Residents explicitly marked For Evacuation stay in the assistance queue until recorded as Evacuated, including residents in Low-risk zones.',
   'Risk uses the complete registered zone population. Vulnerability and evacuation-status filters narrow population counts and lists, not the underlying zone risk.',
   'Shelter availability is capacity minus occupancy for operational centers. Full or Unavailable centers contribute no available spaces; missing occupancy is unknown. Nearly Full means at least 90% occupied or a recorded Near Capacity status.'
 ];
@@ -103,7 +104,7 @@ export function buildDss(source: DssSource, filters: DssFilters = {}, now = new 
       risk:zone.risk,priority,status:r.evacuation_status,manualPriority:r.priority_level,
       assistance:[r.can_swim==='No'?'Cannot swim':null,r.house_type==='Light materials'?'House: light materials':null].filter(Boolean)};
   }).sort((a,b)=>priorityOrder.indexOf(a.priority)-priorityOrder.indexOf(b.priority) || riskLevels.indexOf(b.risk)-riskLevels.indexOf(a.risk) || a.name.localeCompare(b.name));
-  const evacuation = priorities.filter(r=>r.priority!=='Lower' && r.status!=='Evacuated');
+  const evacuation = priorities.filter(r=>(r.priority!=='Lower' || r.status==='For Evacuation') && r.status!=='Evacuated');
   const priorityHouseholds = [...new Set(evacuation.map(r=>r.householdId))].map(id=>{
     const members = evacuation.filter(r=>r.householdId===id);
     const first = members[0]!;

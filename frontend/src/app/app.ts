@@ -422,9 +422,9 @@ export class App implements OnInit, OnDestroy {
   };
   currentResource = '';
   overallRisk = 'Low';
-  activeValidatedReports = 0;
-  affectedZones = 0;
-  priorityResidents = 0;
+  activeValidatedReports: number | '—' = 0;
+  affectedZones: number | '—' = 0;
+  priorityResidents: number | '—' = 0;
   pendingReportCount = 0;
   dashboardAlert?: Record<string, unknown>;
   dashboardNotifications: Record<string, unknown>[] = [];
@@ -1090,10 +1090,9 @@ export class App implements OnInit, OnDestroy {
       notifications: this.api.dashboardNotifications().pipe(catchError(() => of({ items: [] }))),
       shelters: this.api.list<Record<string, unknown>>('shelters', 1, 3).pipe(catchError(() => of({ items: [], page: 1, pageSize: 3, totalItems: 0, totalPages: 1 }))),
       risk: this.api.statistics('risk-summary').pipe(catchError(() => of({} as Record<string, unknown>))),
-      priorities: this.api.statistics('evacuation-priorities').pipe(catchError(() => of({ items: [] } as Record<string, unknown>)))
-      ,weather: this.api.currentWeather().pipe(catchError(() => of(null)))
+      weather: this.api.currentWeather().pipe(catchError(() => of(null)))
     }).pipe(finalize(() => this.finishLoading())).subscribe({
-      next: ({ summary, reports, alert, notifications, shelters, risk, priorities, weather }) => {
+      next: ({ summary, reports, alert, notifications, shelters, risk, weather }) => {
         this.dashboardAttention = { pending: dashboardCount(summary.pendingReports), residents: dashboardCount(summary.forEvacuationResidents), shelters: dashboardCount(summary.nearCapacityShelters) };
         this.metrics[0]!.value = String(summary.totalResidents ?? 0);
         this.metrics[0]!.note = `${summary.highPriorityResidents ?? 0} high · ${summary.mediumPriorityResidents ?? 0} medium · ${summary.lowPriorityResidents ?? 0} low priority`;
@@ -1106,10 +1105,10 @@ export class App implements OnInit, OnDestroy {
         this.reports = reports.items.map((row) => this.mapReport(row));
         this.dashboardAlert = alert.alert ?? undefined;
         this.dashboardNotifications = notifications.items;
-        this.overallRisk = String(risk['overallRiskLevel'] ?? 'Low');
-        this.activeValidatedReports = Number(risk['activeValidatedReports'] ?? 0);
-        this.affectedZones = Number(risk['affectedZones'] ?? 0);
-        this.priorityResidents = ((priorities['items'] as unknown[] | undefined) ?? []).length;
+        this.overallRisk = String(risk['overallRiskLevel'] ?? 'Unknown');
+        this.activeValidatedReports = dashboardCount(risk['activeValidatedReports']);
+        this.affectedZones = dashboardCount(risk['affectedZones']);
+        this.priorityResidents = dashboardCount(risk['priorityResidents']);
         if (weather) this.weather = weather;
         this.shelters = shelters.items.map((row) => ({
           name: String(row['shelter_name'] ?? row['shelterName'] ?? 'Shelter'),
@@ -1524,6 +1523,7 @@ export class App implements OnInit, OnDestroy {
 
   openAssignResidents(center: Record<string, unknown>, event?: Event) {
     event?.stopPropagation();
+    if (this.loading || center['record_status'] !== 'Active' || ['Full', 'Unavailable'].includes(String(center['status'])) || +(center['resident_occupancy'] || 0) >= +(center['capacity'] || 0)) return;
     this.assignmentCenter = center;
     this.assignmentOpen = true;
     this.assignmentSearch = '';

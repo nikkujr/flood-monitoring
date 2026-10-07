@@ -1,10 +1,11 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { BehaviorSubject, Subscription, catchError, combineLatest, finalize, of, switchMap, timer } from 'rxjs';
+import { BehaviorSubject, Subscription, catchError, combineLatest, finalize, map, of, switchMap, timer, type Observable } from 'rxjs';
 import { ApiService, type ZoneStatusPreview } from './api.service';
 import type { DssData } from './dss.models';
 import { searchResidents } from './admin-ui';
+import { buildEvacuationPlan } from './evacuation-plan';
 
 const emptyFilters = (): Record<string,string> => ({
   zone:'', risk:'', from:'', to:'', severity:'', evacuationStatus:'', vulnerability:''
@@ -48,12 +49,72 @@ export class DssComponent implements OnInit, OnDestroy {
   markAllBulkResidents(checked: boolean) { for (const resident of this.bulkVisibleEligibleResidents) this.toggleBulkResident(resident.id, checked); }
   filters: Record<string,string> = emptyFilters();
   draftFilters: Record<string,string> = emptyFilters();
-  activeTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology' = 'overview';
+  activeTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology'|'planner' = 'overview';
+  planBaseline:DssData|null=null;
+  planScenario:DssData|null=null;
+  plan:ReturnType<typeof buildEvacuationPlan>|null=null;
+  planLoading=false;
+  planError='';
+  planSuccess='';
+  planSearch='';
+  allowOtherZones=true;
+  scenarioZone='';
+  scenarioMajorReports=0;
+  scenarioDirty=false;
+  scenarioClosedCenters=new Set<string>();
+  planSelectedIds=new Set<string>();
+  arrivalRows:NonNullable<typeof this.plan>['assignments']=[];
+  arrivalShelter:DssData['shelters'][number]|null=null;
+  arrivalConfirmed=false;
+  arrivalAt='';
+  arrivalSaving=false;
+  get visiblePlanRows() {
+    return this.plan?.assignments.filter(a=>[a.person.name,a.person.household,a.person.zone,a.shelter?.name??''].join(' ').toLowerCase().includes(this.planSearch.trim().toLowerCase()))??[];
+  }
+  get planCenters() {return (this.planScenario??this.planBaseline)?.shelters??[];}
+  get baselinePlan() {return this.planBaseline?buildEvacuationPlan(this.planBaseline,this.allowOtherZones):null;}
+  get planAllSelected() {const rows=this.visiblePlanRows.filter(a=>a.shelter);return rows.length>0&&rows.every(a=>this.planSelectedIds.has(a.person.id));}
+  togglePlanResident(id:string,selected:boolean) {selected?this.planSelectedIds.add(id):this.planSelectedIds.delete(id);}
+  toggleAllPlanResidents(selected:boolean) {for(const row of this.visiblePlanRows) if(row.shelter)this.togglePlanResident(row.person.id,selected);}
+  toggleScenarioCenter(id:string,closed:boolean) {closed?this.scenarioClosedCenters.add(id):this.scenarioClosedCenters.delete(id);}
+  scenarioChanged() {this.scenarioDirty=true;this.planSelectedIds.clear();this.planSuccess='';}
+  get planPreviewOnly() {return !!this.planScenario||this.scenarioDirty;}
+  get changedPlanZones() {return this.planScenario?.zones.filter(z=>{const baseline=this.planBaseline?.zones.find(b=>b.id===z.id);return z.risk!==baseline?.risk||z.activeReports!==baseline?.activeReports;})??[];}
+  baselineZoneRisk(id:string) {return this.planBaseline?.zones.find(z=>z.id===id)?.risk??'Unknown';}
+  rebuildPlan() {const data=this.planScenario??this.planBaseline;this.plan=data?buildEvacuationPlan(data,this.allowOtherZones):null;this.planSelectedIds.clear();}
+  refreshPlan(simulate=false) {
+    if(this.planLoading||this.arrivalSaving)return;
+    this.planLoading=true;this.planError='';this.plan=null;this.planScenario=null;this.planSelectedIds.clear();
+    const request:Observable<{baseline:DssData;simulated:DssData|null}>=simulate?this.api.simulateDecisionSupport({zoneId:this.scenarioZone||undefined,additionalMajorReports:Number(this.scenarioMajorReports),unavailableShelterIds:[...this.scenarioClosedCenters]}):this.api.decisionSupport({}).pipe(map(baseline=>({baseline,simulated:null})));
+    this.subscription?.add(request.pipe(finalize(()=>{this.planLoading=false;this.cdr.markForCheck();})).subscribe({next:result=>{
+      this.planBaseline=result.baseline;this.planScenario=result.simulated;
+      if(!simulate){this.scenarioZone='';this.scenarioMajorReports=0;this.scenarioClosedCenters.clear();}
+      this.scenarioDirty=false;this.rebuildPlan();
+    },error:error=>this.planError=error?.error?.message??'The plan could not be loaded. Refresh to retry.'}));
+  }
+  reviewPlanArrivals(center:DssData['shelters'][number],dialog:HTMLDialogElement) {
+    if(this.planPreviewOnly||this.planLoading||this.arrivalSaving||!this.canMarkResidents)return;
+    this.arrivalRows=this.plan?.assignments.filter(a=>a.shelter?.id===center.id&&this.planSelectedIds.has(a.person.id))??[];
+    if(!this.arrivalRows.length||this.arrivalRows.length>100)return;
+    this.arrivalShelter=center;this.arrivalConfirmed=false;this.planError='';
+    const now=new Date();this.arrivalAt=new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,16);
+    dialog.showModal();
+  }
+  selectedForCenter(id:string) {return this.plan?.assignments.filter(a=>a.shelter?.id===id&&this.planSelectedIds.has(a.person.id)).length??0;}
+  savePlanArrivals(dialog:HTMLDialogElement) {
+    if(this.planPreviewOnly||this.arrivalSaving||!this.canMarkResidents||!this.arrivalConfirmed||!this.arrivalShelter||!this.arrivalRows.length||!this.arrivalAt||!Number.isFinite(Date.parse(this.arrivalAt)))return;
+    this.arrivalSaving=true;this.planError='';
+    this.subscription?.add(this.api.assignResidents(this.arrivalShelter.id,this.arrivalRows.map(a=>a.person.id),new Date(this.arrivalAt).toISOString(),'Evacuated',Object.fromEntries(this.arrivalRows.map(a=>[a.person.id,a.person.status]))).pipe(finalize(()=>{this.arrivalSaving=false;this.cdr.markForCheck();})).subscribe({
+      next:result=>{this.planSuccess=result.message;dialog.close();this.arrivalSaving=false;this.refreshPlan();this.reload();},
+      error:error=>{this.planError=error?.error?.message??'The arrivals could not be confirmed. Refresh to check resident statuses before retrying.';dialog.close();this.plan=null;this.planSelectedIds.clear();}
+    }));
+  }
   get tabs() {
     return this.mode === 'dss' ? [
       {id:'overview' as const,label:'Response overview'},
       {id:'zones' as const,label:'Zone assessment'},
       {id:'evacuation' as const,label:'Assistance & shelters'},
+      {id:'planner' as const,label:'Evacuation planner'},
       {id:'methodology' as const,label:'Decision rules'}
     ] : [
       {id:'reports' as const,label:'Incident statistics'},
@@ -177,7 +238,7 @@ export class DssComponent implements OnInit, OnDestroy {
     document.querySelector<HTMLButtonElement>('.heading-actions button')?.focus();
   }
   printReport() {window.print();}
-  selectTab(tab: typeof this.activeTab) {this.activeTab=tab;}
+  selectTab(tab: typeof this.activeTab) {this.activeTab=tab;if(tab==='planner'&&!this.planBaseline)this.refreshPlan();}
   level(value:string|null) {return (value??'unknown').toLowerCase().replace(/ /g,'-');}
   pageCount(kind:string) {
     const total=kind==='households'?this.data?.priorityHouseholds.length:kind==='vulnerable'?this.data?.vulnerable.length:this.data?.evacuation.length;

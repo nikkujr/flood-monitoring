@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import { simulationInput, simulateDss } from './dss-simulation.js';
+import type { DssSource } from './dss.js';
+const zone='00000000-0000-4000-8000-000000000001',shelter='00000000-0000-4000-8000-000000000002';
+const source:DssSource={zones:[{zone_id:zone,zone_name:'Test zone'}],households:[{household_id:'house',household_number:'House',zone_id:zone,address_line:'',head_of_household_name:''}],residents:[{resident_id:'person',household_id:'house',full_name:'Test person',date_of_birth:'1950-01-01',address_line:'',priority_level:'Low',evacuation_status:'Safe',vulnerability_type:null,vulnerability_other:null,pwd_specify:null,morbidity:null,can_swim:null,house_type:null}],reports:[],reportZones:[],shelters:[{shelter_id:shelter,shelter_name:'Test center',zone_id:zone,location_text:'',capacity:1,current_occupancy:0,status:'Available'}]};
+const before=JSON.stringify(source);
+const result=simulateDss(source,simulationInput.parse({zoneId:zone,additionalMajorReports:2,unavailableShelterIds:[shelter]}),new Date('2026-10-08T00:00:00Z'));
+assert.equal(result.baseline.overall.risk,'Low');assert.equal(result.simulated.overall.risk,'Critical');
+assert.equal(result.baseline.shelters[0]!.available,1);assert.equal(result.simulated.shelters[0]!.available,0);
+assert.equal(result.baseline.generatedAt,result.simulated.generatedAt,'Both scenarios use one frozen source and assessment time');
+assert.equal(result.simulated.evacuation.length,1);
+assert.equal(JSON.stringify(source),before,'Simulation must not mutate source data');
+assert.equal(simulationInput.safeParse({additionalMajorReports:2}).success,false);
+for(const n of [-1,11,1.5])assert.equal(simulationInput.safeParse({zoneId:zone,additionalMajorReports:n}).success,false);
+assert.throws(()=>simulateDss(source,{additionalMajorReports:0,unavailableShelterIds:['00000000-0000-4000-8000-000000000003']}),/no longer exists/);
+console.log('PASS: same-rule scenario escalation, capacity loss, fixed baseline/time, immutable source, and invalid-scenario rejection.');

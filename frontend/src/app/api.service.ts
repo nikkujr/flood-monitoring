@@ -148,8 +148,12 @@ export class ApiService {
     );
   }
 
-  assignResidents(shelterId: string, residentIds: string[], evacuationAt: string, evacuationStatus: 'Safe' | 'For Monitoring' | 'For Evacuation' | 'Evacuated') {
-    return this.http.post<{ message: string; assignedCount: number }>(`${this.baseUrl}/shelters/${shelterId}/assignments`, { residentIds, evacuationAt, evacuationStatus });
+  assignResidents(shelterId: string, residentIds: string[], evacuationAt: string, evacuationStatus: 'Safe' | 'For Monitoring' | 'For Evacuation' | 'Evacuated', expectedStatuses?:Record<string,string>) {
+    return this.http.post<{ message: string; assignedCount: number }>(`${this.baseUrl}/shelters/${shelterId}/assignments`, { residentIds, evacuationAt, evacuationStatus, expectedStatuses });
+  }
+
+  simulateDecisionSupport(scenario:{zoneId?:string;additionalMajorReports:number;unavailableShelterIds:string[]}) {
+    return this.http.post<{baseline:DssData;simulated:DssData}>(`${this.baseUrl}/statistics/dss/simulation`,scenario);
   }
 
   previewZoneResidentStatus(zoneId: string) {

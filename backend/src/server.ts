@@ -11,7 +11,8 @@ import nodemailer from "nodemailer";
 import { z } from "zod";
 import { config } from "./config.js";
 import { db, healthcheck } from "./db.js";
-import { loadDss } from "./dss-api.js";
+import { loadDss, loadDssSource } from "./dss-api.js";
+import { simulateDss, simulationInput } from './dss-simulation.js';
 import { criticalZoneStatus, zoneStatusInput } from './dss-zone-status.js';
 import { vulnerabilities } from "./dss.js";
 import { reportReviewInput, reportTransitions } from "./report-review.js";
@@ -938,7 +939,8 @@ app.post("/api/shelters/:id/assignments", requireAuth, requireRoles("Super Admin
   const input = z.object({
     residentIds: z.array(z.string().uuid()).min(1).max(100).transform((ids) => [...new Set(ids)]),
     evacuationAt: z.coerce.date(),
-    evacuationStatus: z.enum(["Safe", "For Monitoring", "For Evacuation", "Evacuated"]).default("Evacuated")
+    evacuationStatus: z.enum(["Safe", "For Monitoring", "For Evacuation", "Evacuated"]).default("Evacuated"),
+    expectedStatuses: z.record(z.string().uuid(),z.enum(["Safe", "For Monitoring", "For Evacuation", "Evacuated"])).optional()
   }).parse(req.body);
   const shelterId = String(req.params.id);
   const connection = await db.getConnection();
@@ -946,7 +948,7 @@ app.post("/api/shelters/:id/assignments", requireAuth, requireRoles("Super Admin
     await connection.beginTransaction();
     const [shelters] = await connection.query<any[]>("SELECT shelter_id,capacity,status,record_status FROM shelters WHERE shelter_id=? FOR UPDATE", [shelterId]);
     const shelter = shelters[0];
-    if (!shelter || shelter.record_status !== "Active" || shelter.status === "Unavailable") {
+    if (!shelter || shelter.record_status !== "Active" || ['Unavailable','Full'].includes(shelter.status)) {
       await connection.rollback();
       return res.status(409).json({ message: "The selected evacuation center is unavailable" });
     }
@@ -957,6 +959,10 @@ app.post("/api/shelters/:id/assignments", requireAuth, requireRoles("Super Admin
     if (residents.length !== input.residentIds.length || residents.some((resident) => resident.record_status !== "Active")) {
       await connection.rollback();
       return res.status(400).json({ message: "One or more selected residents are unavailable" });
+    }
+    if (input.expectedStatuses && residents.some(resident=>input.expectedStatuses![resident.resident_id]!==resident.evacuation_status)) {
+      await connection.rollback();
+      return res.status(409).json({message:'Resident statuses changed since the plan was generated. Refresh the planner before recording arrivals.'});
     }
     const duplicate = residents.find((resident) => resident.evacuation_status === "Evacuated" && resident.evacuation_shelter_id === shelterId);
     if (duplicate) {
@@ -1520,6 +1526,10 @@ app.put("/api/notifications/:id/read-status", requireAuth, asyncRoute(async (req
 app.get("/api/statistics/dss", requireAuth, asyncRoute(async (req, res) => {
   res.json(await loadDss(req.query));
 }));
+app.post('/api/statistics/dss/simulation',requireAuth,asyncRoute(async(req,res)=>{
+  const scenario=simulationInput.parse(req.body);
+  res.json(simulateDss(await loadDssSource(),scenario));
+}));
 
 for (const method of ['get', 'post'] as const) {
   app[method]('/api/statistics/dss/zones/:id/resident-status', requireAuth, requireRoles('Super Admin', 'Disaster Officer', 'Data Encoder'), asyncRoute(async (req, res) => {
@@ -1574,21 +1584,9 @@ app.get("/api/weather/current", asyncRoute(async (_req, res) => {
 }));
 
 app.get("/api/statistics/risk-summary", requireAuth, asyncRoute(async (_req, res) => {
-  const [rows] = await db.query<any[]>(`
-    SELECT CASE
-      WHEN SUM(CASE WHEN fr.severity_level='Major Incident' OR rz.risk_level='High' THEN 1 ELSE 0 END)>0 THEN 'High'
-      WHEN SUM(CASE WHEN fr.severity_level='Minor Incident' OR rz.risk_level='Medium' THEN 1 ELSE 0 END)>0 THEN 'Medium'
-      ELSE 'Low' END overallRiskLevel,
-      COUNT(DISTINCT fr.report_id) activeValidatedReports,
-      COUNT(DISTINCT frz.zone_id) affectedZones
-    FROM flood_reports fr
-    LEFT JOIN flood_report_zones frz ON frz.report_id=fr.report_id
-    LEFT JOIN risk_zones rz ON ST_Intersects(
-      ST_GeomFromGeoJSON(rz.polygon_geojson),
-      ST_GeomFromText(CONCAT('POINT(',fr.longitude,' ',fr.latitude,')'),4326)
-    )
-    WHERE fr.status='Validated'`);
-  res.json(rows[0]);
+  const assessment = await loadDss({});
+  res.json({ overallRiskLevel: assessment.overall.risk, activeValidatedReports: assessment.metrics.activeReports,
+    affectedZones: assessment.metrics.affectedZones, priorityResidents: assessment.metrics.priorityResidents });
 }));
 app.get("/api/statistics/zone-breakdown", requireAuth, asyncRoute(async (_req, res) => {
   const [items] = await db.query(`

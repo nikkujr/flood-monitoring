@@ -359,7 +359,7 @@
 
           <article class="panel risk-panel">
             <div class="panel-head"><div><span class="eyebrow">DECISION SUPPORT</span><h2>Current risk</h2></div><span class="live-pill">● LIVE</span></div>
-            <div class="risk-gauge"><div class="gauge-value">{{ overallRisk.toUpperCase() }}</div><div class="gauge-bar"><i [style.left]="overallRisk === 'High' ? '83%' : overallRisk === 'Medium' ? '50%' : '16%'"></i></div><div class="gauge-labels"><span>Low</span><span>Medium</span><span>High</span></div></div>
+            <div class="risk-gauge"><div class="gauge-value">{{ overallRisk.toUpperCase() }}</div><div class="gauge-bar">@if (overallRisk !== 'Unknown') { <i [style.left]="overallRisk === 'Critical' ? '87.5%' : overallRisk === 'High' ? '62.5%' : overallRisk === 'Moderate' ? '37.5%' : '12.5%'"></i> }</div><div class="gauge-labels"><span>Low</span><span>Moderate</span><span>High</span><span>Critical</span></div></div>
             <div class="risk-factors">
               <div><span>≈</span><p><b>{{ activeValidatedReports }} validated reports</b><small>Contributing to current risk</small></p></div>
               <div><span>⌁</span><p><b>{{ affectedZones }} zones affected</b><small>Based on validated incidents</small></p></div>
@@ -513,7 +513,7 @@
                         <span class="center-progress"><i [style.width.%]="+(center['capacity'] || 0) > 0 ? (+(center['resident_occupancy'] || 0) / +(center['capacity'] || 1) * 100) : 0"></i></span>
                         <b>View resident list →</b>
                       </button>
-                      <div class="center-card-actions"><button type="button" class="center-assign" (click)="openAssignResidents(center, $event)" [disabled]="loading || center['record_status'] !== 'Active' || center['status'] === 'Unavailable' || +(center['resident_occupancy'] || 0) >= +(center['capacity'] || 0)">Assign Residents</button><button type="button" class="center-toggle" (click)="toggleEvacuationCenter(center, $event)" [disabled]="loading">{{ center['record_status'] === 'Active' ? 'Deactivate' : 'Activate' }}</button></div>
+                      <div class="center-card-actions"><button type="button" class="center-assign" (click)="openAssignResidents(center, $event)" [disabled]="loading || center['record_status'] !== 'Active' || (center['status'] === 'Unavailable' || center['status'] === 'Full') || +(center['resident_occupancy'] || 0) >= +(center['capacity'] || 0)">Assign Residents</button><button type="button" class="center-toggle" (click)="toggleEvacuationCenter(center, $event)" [disabled]="loading">{{ center['record_status'] === 'Active' ? 'Deactivate' : 'Activate' }}</button></div>
                     </article>
                   } @empty { <div class="table-feedback">No evacuation centers have been added.</div> }
                 </div>
