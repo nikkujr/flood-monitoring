@@ -292,7 +292,6 @@ export class App implements OnInit, OnDestroy {
     const record = this.publicMapData['zones']?.find((zone: Record<string, unknown>) => zone['zone_id'] === id);
     if (record) this.selectedMapFocus = { id, resource: 'barangay-zones', record, nonce: Date.now() };
     this.changeDetector.detectChanges();
-    if (id && window.innerWidth <= 1100) document.getElementById('zone-response-title')?.scrollIntoView({ block: 'start' });
   }
 
   openResponseResidents(zone = '', status = 'For Evacuation') {

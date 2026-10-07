@@ -110,13 +110,14 @@ body { min-width: 320px; }
 .leaflet-tooltip-top.shelter-map-label::before { border-top-color: var(--muted); }
 
 .resident-year-selector{display:flex;align-items:center;gap:8px;height:38px;padding:0 7px 0 11px;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--muted);font-size:12px;font-weight:700}.resident-year-selector select{height:28px;min-width:112px;border:0;border-left:1px solid var(--border);background:var(--surface);padding:0 25px 0 9px;color:var(--text);font-size:12px;font-weight:800;outline:0}.resident-year-selector:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px #1764c114}.resident-year-overview{margin-bottom:17px;padding:18px;border:1px solid var(--border);border-radius:13px;background:linear-gradient(135deg,var(--canvas),var(--surface));box-shadow:0 4px 14px #183c6710}.resident-year-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:14px}.resident-year-heading h2{margin:4px 0;font-size:18px;color:var(--text)}.resident-year-heading p{margin:0;color:var(--muted);font-size:12px}.snapshot-badge{padding:5px 9px;border-radius:14px;background:var(--soft);color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}.resident-summary-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.resident-summary-cards article{padding:13px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}.resident-summary-cards span,.resident-summary-cards b,.resident-summary-cards small{display:block}.resident-summary-cards span{color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}.resident-summary-cards b{margin:5px 0 3px;color:var(--accent);font-size:24px}.resident-summary-cards small{color:var(--muted);font-size:12px}.vulnerability-summary{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin-top:11px;padding-top:11px;border-top:1px solid var(--border)}.vulnerability-summary>b{margin-right:4px;color:var(--muted);font-size:12px}.vulnerability-summary span{padding:5px 8px;border-radius:13px;background:var(--soft);color:var(--muted);font-size:12px}.vulnerability-summary strong{margin-left:4px;color:var(--accent)}@media(max-width:900px){.resident-summary-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:540px){.resident-year-selector{width:100%;justify-content:space-between}.resident-summary-cards{grid-template-columns:1fr 1fr}.resident-year-heading{display:block}.snapshot-badge{display:inline-block;margin-top:8px}}
-.resident-summary-cards button{position:relative;display:grid;grid-template-columns:38px minmax(0,1fr) auto;grid-template-rows:auto auto auto;column-gap:11px;width:100%;padding:13px 14px;border:1px solid #e0e8f1;border-radius:10px;background:#fff;color:inherit;text-align:left;font:inherit;cursor:pointer;transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease}
-.resident-summary-cards button:hover{transform:translateY(-2px);border-color:#a9c7ea;box-shadow:0 7px 18px #173b6814}
-.resident-summary-cards button:focus-visible{outline:2px solid #1764c1;outline-offset:3px}
-.resident-summary-cards button.active{border-color:#78ace8;background:#f6faff}
-.resident-summary-icon{grid-row:1/4;align-self:center;display:grid;place-items:center;width:38px;height:38px;border-radius:9px;background:#e9f3ff;color:#0758c7}
+.resident-summary-cards button{position:relative;display:grid;grid-template-columns:38px minmax(0,1fr) auto;grid-template-rows:auto auto auto;column-gap:11px;width:100%;padding:13px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);text-align:left;font:inherit;cursor:pointer;transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease}
+.resident-summary-cards button:hover{transform:translateY(-2px);border-color:var(--accent);box-shadow:0 7px 18px #173b6814}
+.resident-summary-cards button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.resident-summary-cards button.active{border-color:var(--accent);background:var(--soft)}
+.resident-summary-cards button.active :is(span,small,em){color:var(--text)}
+.resident-summary-icon{grid-row:1/4;align-self:center;display:grid;place-items:center;width:38px;height:38px;border-radius:9px;background:var(--soft);color:var(--accent)}
 .resident-summary-icon svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.resident-summary-cards em{grid-column:3;grid-row:1/4;align-self:center;color:#7d91a8;font-size:15px;font-style:normal}
+.resident-summary-cards em{grid-column:3;grid-row:1/4;align-self:center;color:var(--muted);font-size:15px;font-style:normal}
 @media (max-width:540px){.resident-summary-cards button{grid-template-columns:32px minmax(0,1fr) auto;padding:11px}}
 @media (max-width:540px){.resident-summary-icon{width:32px;height:32px}}
 @media (max-width:540px){.resident-summary-icon svg{width:17px;height:17px}}
@@ -274,18 +275,20 @@ html:root app-root app-dss .statistics-tabs { flex-wrap: wrap; overflow: visible
 html:root app-root app-dss .statistics-tabs button { flex: 1 1 150px; min-height: 48px; font-size: 14px; white-space: normal; }
 html:root app-root .record-editor .editor-section label, html:root app-root .editor-modal label { font-size: 14px; line-height: 1.5; }
 html:root app-root .record-editor .editor-section[hidden] { display: none; }
-html:root app-root .editor-progress { grid-column: 1/-1; padding: 16px; background: var(--canvas); border: 1px solid var(--border); border-radius: 12px; }
-html:root app-root .editor-progress p { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
-html:root app-root .editor-progress ol { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; list-style: none; padding: 0; margin: 0; }
+html:root app-root .editor-progress { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 8px; grid-column: 1/-1; padding: 10px 12px; background: var(--canvas); border: 1px solid var(--border); border-radius: 12px; }
+html:root app-root .editor-progress p { margin: 0; font-size: 14px; font-weight: 600; }
+html:root app-root .editor-progress ol { display: none; grid-column: 1/-1; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; list-style: none; padding: 0; margin: 0; max-height: min(160px,25dvh); overflow-y: auto; }
+html:root app-root .editor-progress.expanded ol { display: grid; }
 html:root app-root .editor-progress button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 12px; text-align: left; }
 html:root app-root .editor-progress button span { display: grid; place-items: center; flex: 0 0 24px; height: 24px; border-radius: 50%; background: var(--soft); font-weight: 700; }
 html:root app-root .editor-progress button[aria-current=step] { border-color: var(--accent); color: var(--accent); font-weight: 700; }
 html:root app-root .editor-progress button[aria-current=step] span { background: #0758c7; color: white; }
-html:root app-root .editor-progress .step-list-toggle { display: none; }
-html:root app-root .editor-wizard { display: flex; flex-direction: column; height: min(850px,90dvh); overflow: hidden; }
-html:root app-root .record-editor.editor-wizard form { flex: 1; min-height: 0; grid-template-columns: minmax(0,1fr); grid-template-rows: auto minmax(0,1fr) auto; }
-html:root app-root .editor-wizard .editor-section { overflow-y: auto; align-content: start; padding-right: 8px; }
-html:root app-root .editor-wizard .modal-actions { position: static; margin: 0; padding: 12px 0 0; }
+html:root app-root .editor-progress .step-list-toggle { width: auto; min-height: 36px; color: var(--accent); }
+html:root app-root .editor-wizard { display: flex; flex-direction: column; height: min(850px,90dvh); overflow: auto; }
+html:root app-root .editor-wizard > :not(form) { flex-shrink: 0; }
+html:root app-root .record-editor.editor-wizard form { flex: 1 0 240px; min-height: 0; grid-template-columns: minmax(0,1fr); grid-template-rows: auto minmax(100px,1fr) auto; }
+html:root app-root .editor-wizard .editor-section { min-height: 0; overflow-y: auto; align-content: start; padding-right: 8px; }
+html:root app-root .editor-wizard .modal-actions { position: sticky; bottom: 0; margin: 0; padding: 12px 0 0; }
 html:root app-root .editor-review { grid-column: 1/-1; min-height: 0; overflow-y: auto; }
 html:root app-root .editor-review[hidden] { display: none; }
 html:root app-root .editor-review h3 { margin: 0; font-size: 18px; }
@@ -304,13 +307,8 @@ html:root app-root .attention-grid strong { font-size: 32px; }
 html:root app-root .attention-grid b { font-size: 14px; }
 html:root app-root .attention-grid span { font-size: 12px; color: var(--muted); }
 html:root app-root .attention-grid small { margin-top: 8px; font-size: 14px; color: var(--accent); font-weight: 600; }
-html:root app-root .zone-response { margin: 16px; }
-html:root app-root #zone-response-title { scroll-margin-top: 96px; }
-html:root app-root .map-response-workspace { display: grid; grid-template-columns: minmax(0,1fr) minmax(340px,.8fr); align-items: start; }
-html:root app-root .map-response-workspace .zone-response { margin: 16px 16px 16px 0; padding: 16px; }
-html:root app-root .map-response-workspace .panel-head { flex-wrap: wrap; }
-html:root app-root .map-response-workspace .zone-response-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
-@media(max-width:1100px) { html:root app-root .map-response-workspace { grid-template-columns: minmax(0,1fr); } html:root app-root .map-response-workspace .zone-response { margin: 16px; } }
+html:root app-root dialog.zone-response { margin: auto; overflow: auto; }
+html:root app-root .zone-response .panel-head { flex-wrap: wrap; }
 html:root app-root .zone-response label { display: grid; gap: 8px; font-size: 14px; }
 html:root app-root .zone-response select { min-height: 44px; padding: 10px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font-size: 14px; }
 html:root app-root .zone-response-heading, html:root app-root .zone-response-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
@@ -324,13 +322,17 @@ html:root app-root .zone-response > small { display: block; margin-top: 16px; fo
 @media(max-width:760px) {
   html:root app-root .attention-grid, html:root app-root .editor-review dl { grid-template-columns: minmax(0,1fr); }
   html:root app-root .zone-response-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  html:root app-root .zone-response { margin: 10px; padding: 16px; }
+  html:root app-root .zone-response { padding: 16px; }
   html:root app-root .editor-wizard { height: calc(100dvh - 20px); }
   html:root app-root .editor-progress ol { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  html:root app-root .editor-progress:not(.expanded) ol { grid-template-columns: minmax(0,1fr); }
-  html:root app-root .editor-progress:not(.expanded) li:not(:has([aria-current=step])) { display: none; }
-  html:root app-root .editor-progress .step-list-toggle { display: block; width: auto; min-height: 36px; margin-bottom: 8px; color: var(--accent); }
   html:root app-root .record-editor .modal-actions .primary { flex-basis: 100%; }
+}
+@media(max-height:600px) {
+  html:root app-root .editor-wizard { height: calc(100dvh - 32px); max-height: calc(100dvh - 32px); padding: 16px; }
+  html:root app-root .editor-wizard .panel-head { margin-bottom: 8px; }
+  html:root app-root .editor-wizard h2 { margin: 4px 0; }
+  html:root app-root .record-editor.editor-wizard form { flex-basis: 200px; gap: 8px; }
+  html:root app-root .editor-wizard .modal-actions .primary { flex-basis: auto; }
 }
 
 .resource-filter-dialog{width:min(400px,calc(100vw - 32px));max-height:calc(100dvh - 32px);margin:auto;padding:0;border:1px solid var(--border);border-radius:14px;background:var(--surface);color:var(--text);box-shadow:0 24px 70px #0005;overscroll-behavior:contain}.resource-filter-dialog::backdrop{background:#0d234688}.shell .filter-menu .resource-filter-dialog form{position:static;inset:auto;transform:none;width:100%;max-height:none;overflow:visible;border:0;border-radius:0;box-shadow:none}.filter-menu>.secondary{display:flex;align-items:center;gap:6px;min-height:44px}.filter-menu .resource-filter-dialog .filter-actions{flex-wrap:wrap}.filter-menu .resource-filter-dialog .filter-actions button{height:auto;min-height:44px}.filter-menu .resource-filter-dialog .filter-close{min-height:32px}
