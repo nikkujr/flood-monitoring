@@ -1,4 +1,4 @@
-import { AfterViewInit, Component, ElementRef, Input, OnChanges, OnDestroy, ViewChild } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, EventEmitter, Input, OnChanges, OnDestroy, Output, ViewChild } from '@angular/core';
 import * as L from 'leaflet';
 import { environment } from '../environments/environment';
 
@@ -25,17 +25,18 @@ import { environment } from '../environments/environment';
     </div>
   `,
   styles: [`
-    :host{display:block}.polygon-help{font-size:9px;font-weight:500;color:#758398;margin-bottom:7px}
-    .polygon-map-wrap{position:relative}.polygon-map{height:330px;border:1px solid #dce3ec;border-radius:10px;overflow:hidden}.boundary-key{position:absolute;right:10px;bottom:10px;z-index:400;display:flex;align-items:center;gap:6px;padding:6px 8px;background:#fff;box-shadow:0 2px 8px #15304a2e;border-radius:6px;color:#40506a;font-size:9px;font-weight:600}.boundary-key i{width:20px;border-top:3px dashed #0758c7}
+    :host{display:block}.polygon-help{font-size:9px;font-weight:500;color:var(--muted);margin-bottom:7px}
+    .polygon-map-wrap{position:relative}.polygon-map{height:330px;border:1px solid var(--border);border-radius:10px;overflow:hidden}.boundary-key{position:absolute;right:10px;bottom:10px;z-index:400;display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--surface);box-shadow:0 2px 8px #15304a2e;border-radius:6px;color:var(--muted);font-size:9px;font-weight:600}.boundary-key i{width:20px;border-top:3px dashed #0758c7}
     .draw-surface{position:absolute;inset:0;z-index:500;border:0;border-radius:10px;background:transparent;cursor:crosshair;padding:0}
     .draw-surface span{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:#0758c7;color:#fff;border-radius:20px;padding:6px 11px;font-size:9px;box-shadow:0 3px 10px #083b7d45;pointer-events:none}
-    .polygon-actions{display:flex;align-items:center;gap:8px;margin-top:8px}.polygon-actions span{margin-right:auto;color:#758398;font-size:9px}
-    .polygon-actions button{border:1px solid #dce3ec;background:#fff;color:#40506a;border-radius:7px;padding:6px 9px;font-size:9px}
+    .polygon-actions{display:flex;align-items:center;gap:8px;margin-top:8px}.polygon-actions span{margin-right:auto;color:var(--muted);font-size:9px}
+    .polygon-actions button{border:1px solid var(--border);background:var(--surface);color:var(--muted);border-radius:7px;padding:6px 9px;font-size:9px}
     .polygon-actions .draw-toggle{background:#0758c7;color:#fff;border-color:#0758c7}
     @media(max-width:760px){.polygon-map{height:clamp(270px,44dvh,360px)}.polygon-actions{align-items:stretch;flex-wrap:wrap}.polygon-actions span{flex:1 1 100%;margin:0}.polygon-actions button{flex:1 1 110px;min-height:40px}.draw-surface span{width:max-content;max-width:calc(100% - 20px);text-align:center;white-space:normal}.boundary-key{left:8px;right:auto;max-width:calc(100% - 16px)}}
   `]
 })
 export class PolygonEditorComponent implements AfterViewInit, OnChanges, OnDestroy {
+  @Output() changed = new EventEmitter<void>();
   @ViewChild('polygonPayload') private polygonPayload?: ElementRef<HTMLInputElement>;
   @Input() name = 'polygonGeoJson';
   @Input() value: unknown = '';
@@ -83,7 +84,7 @@ export class PolygonEditorComponent implements AfterViewInit, OnChanges, OnDestr
         if (!this.map || !collection.features[0]) return;
         this.officialBoundary?.remove();
         this.officialBoundary = L.geoJSON(collection.features[0], {
-          style: { color: '#0758c7', weight: 4, fillColor: '#2f80d8', fillOpacity: .06, dashArray: '7 5' }
+          style: { color: '#0758c7', weight: 4, fill: false, dashArray: '7 5' }
         }).bindPopup('<strong>Colacling (Del Rosario)</strong><br>Official barangay boundary').addTo(this.map);
         this.map.fitBounds(this.officialBoundary.getBounds(), { padding: [25, 25], maxZoom: 16 });
       })
@@ -99,7 +100,7 @@ export class PolygonEditorComponent implements AfterViewInit, OnChanges, OnDestr
         const geo = typeof value === 'string' ? JSON.parse(value) : value;
         const color = /^#[0-9a-f]{6}$/i.test(String(zone['zone_color'] ?? '')) ? String(zone['zone_color']) : '#64748b';
         L.geoJSON(geo as any, {
-          style: { color, fillColor: color, fillOpacity: .1, weight: 3, dashArray: '6 4' }
+          style: { color, fill: false, weight: 3, dashArray: '6 4' }
         }).bindTooltip(String(zone['zone_name'] ?? 'Existing zone')).addTo(this.existingZoneLayer);
       } catch {
         continue;
@@ -144,6 +145,7 @@ export class PolygonEditorComponent implements AfterViewInit, OnChanges, OnDestr
   private updateValue() {
     this.updateGeoJson();
     this.render();
+    this.changed.emit();
   }
 
   private updateGeoJson() {

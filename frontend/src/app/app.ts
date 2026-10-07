@@ -1,13 +1,17 @@
-import { ChangeDetectorRef, Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
+import { ChangeDetectorRef, Component, HostListener, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { DatePipe } from '@angular/common';
 import { catchError, finalize, forkJoin, of, switchMap } from 'rxjs';
-import { ApiService, ResidentYearSummary, WeatherData } from './api.service';
+import { ApiService, ResidentYearSummary, WeatherData, type HouseholdDetails, type ResidentDetails, type FloodReportDetails, type ReportReview } from './api.service';
 import { LiveMapComponent } from './live-map.component';
 import { PolygonEditorComponent } from './polygon-editor.component';
 import { LocationPickerComponent } from './location-picker.component';
 import { DssComponent } from './dss.component';
+import { dashboardCount, editorFieldSections, shortRecordId } from './admin-ui';
+import type { DssData } from './dss.models';
+import {draftKey,draftValues,readDraft,writeDraft,removeDraft,type FormDraft} from './form-draft';
 
-type PageId = 'dashboard' | 'map' | 'reports' | 'residents' | 'households' | 'evacuation' | 'statistics' | 'notifications' | 'users';
+type PageId = 'dashboard' | 'map' | 'reports' | 'residents' | 'households' | 'evacuation' | 'statistics' | 'dss' | 'notifications' | 'users';
 type PublicPage = 'home' | 'map' | 'report' | 'login';
 type EditorOption = { value: string; label: string };
 type EditorField = {
@@ -33,7 +37,7 @@ function validPhilippineContactNumber(value: unknown) {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [FormsModule, LiveMapComponent, PolygonEditorComponent, LocationPickerComponent, DssComponent],
+  imports: [FormsModule, DatePipe, LiveMapComponent, PolygonEditorComponent, LocationPickerComponent, DssComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -41,6 +45,93 @@ export class App implements OnInit, OnDestroy {
   readonly api = inject(ApiService);
   private readonly changeDetector = inject(ChangeDetectorRef);
   menuOpen = false;
+  theme = document.documentElement.dataset['theme'] ?? 'system';
+  residentImportOpen = false;
+  residentImportCsv = '';
+  residentImportName = '';
+  residentImportCount = 0;
+  residentImportBusy = false;
+  residentImportError = '';
+
+  openResidentImport() {
+    this.residentImportOpen = true;
+    this.residentImportError = ''; this.residentImportCount = 0;
+    this.residentImportCsv = ''; this.residentImportName = '';
+    this.changeDetector.detectChanges();
+    document.querySelector<HTMLButtonElement>('.resident-import-modal .modal-close')?.focus();
+  }
+
+  closeResidentImport() {
+    if (this.residentImportBusy) return;
+    this.residentImportOpen = false;
+    document.getElementById('resident-import-trigger')?.focus();
+  }
+
+  residentImportKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') { event.preventDefault(); this.closeResidentImport(); }
+    if (event.key !== 'Tab') return;
+    const controls = Array.from(document.querySelectorAll<HTMLElement>('.resident-import-modal button:not(:disabled), .resident-import-modal input:not(:disabled)'));
+    const first = controls[0], last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  }
+
+  setTheme(value: string) {
+    if (!['system', 'dark', 'light'].includes(value)) return;
+    this.theme = value;
+    document.documentElement.dataset['theme'] = value;
+    try { localStorage.setItem('bantay-baha-theme', value); } catch { /* Preference still applies for this visit. */ }
+  }
+
+  downloadResidentTemplate() {
+    const csv = 'household_number,full_name,date_of_birth,sex,address_line,priority_level,contact_number,vulnerability_type,emergency_contact_name,emergency_contact_number\r\n';
+    const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = 'resident-import-template.csv'; link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async selectResidentImport(event: Event) {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    this.residentImportCsv = ''; this.residentImportCount = 0; this.residentImportError = '';
+    this.residentImportName = file?.name ?? '';
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.csv') || file.size > 500_000) {
+      this.residentImportError = 'Choose a CSV file no larger than 500 KB.';
+      return;
+    }
+    this.residentImportBusy = true;
+    try {
+      this.residentImportCsv = await file.text();
+      this.submitResidentImport(true);
+    } catch {
+      this.residentImportBusy = false;
+      this.residentImportError = 'The file could not be read.';
+      this.changeDetector.detectChanges();
+    }
+  }
+
+  submitResidentImport(preview = false) {
+    if (!this.residentImportCsv || (!preview && (!this.residentImportCount || this.residentImportBusy))) return;
+    this.residentImportBusy = true;
+    this.residentImportError = '';
+    this.api.create<{ count: number; message: string }>('residents/import', { csv: this.residentImportCsv, preview }).pipe(finalize(() => {
+      this.residentImportBusy = false;
+      this.changeDetector.detectChanges();
+    })).subscribe({
+      next: result => {
+        if (preview) this.residentImportCount = result.count;
+        else {
+          this.residentImportOpen = false;
+          this.residentImportCsv = ''; this.residentImportCount = 0;
+          this.successMessage = result.message;
+          this.page = 1;
+          this.loadResource();
+        }
+      },
+      error: error => { this.residentImportCount = 0; this.residentImportError = error?.error?.message ?? 'Import failed. No residents were imported.'; }
+    });
+  }
   publicPage: PublicPage = 'home';
   activePage: PageId = 'dashboard';
   selectedReport: unknown;
@@ -52,10 +143,256 @@ export class App implements OnInit, OnDestroy {
   recoveryOpen = false;
   resetToken = '';
   errorMessage = '';
+  resourceLoadError = '';
   successMessage = '';
   publicToastMessage = '';
   editorOpen = false;
+  editorStep = 0;
+  editorStepsExpanded = false;
+  editorReview: { title: string; fields: { label: string; value: string }[] }[] = [];
+  editorDirty = false;
+  editorDraft?:FormDraft;
+  editorDraftPending=false;
+  editorDraftSaved=false;
+  editorDraftError='';
+  editorDetailsLoading=false;
+  publicDraft=readDraft(draftKey('public','flood-report'));
+  publicDraftPending=!!this.publicDraft;
+  publicDraftValues:Record<string,string|string[]>={};
+  publicDraftSaved=false;
+  publicDraftError='';
+  get editorDraftKey(){return draftKey(this.api.user()?.userId??'anonymous',this.currentResource,this.editorId||'new');}
+  get hasNewRecordDraft(){return !!readDraft(draftKey(this.api.user()?.userId??'anonymous',this.currentResource));}
+  saveEditorDraft(){
+    if(this.editorDraftPending||this.editorDetailsLoading)return;
+    this.editorDirty=true;
+    const form=document.querySelector<HTMLFormElement>('#record-editor form');if(!form)return;
+    const values=draftValues(new FormData(form).entries(),this.editorFields.filter(f=>f.type==='password').map(f=>f.name));
+    for(const field of this.editorFields.filter(f=>f.type==='multiselect')) values[field.name]=new FormData(form).getAll(field.name).map(String);
+    const draft:FormDraft={values,step:this.editorStep,updatedAt:Date.now(),expectedStatus:this.editorReportStatus,hasPhotos:[...new FormData(form).values()].some(v=>v instanceof File&&v.size>0)};
+    this.editorDraftSaved=writeDraft(this.editorDraftKey,draft);
+    this.editorDraftError=this.editorDraftSaved?'':'Browser draft could not be saved. Keep this form open until you save the record.';
+    this.editorDraft=draft;
+  }
+  resumeEditorDraft(){
+    const draft=this.editorDraft;if(!draft||this.editorDetailsLoading)return;
+    if(this.activePage==='reports'&&this.editorId&&draft.expectedStatus!==this.editorReportStatus){this.editorDraftError='This report changed since the draft was saved. Discard the draft and review its current details.';return;}
+    const allowed=new Set([...this.editorFields.filter(f=>f.type!=='password').map(f=>f.name),'latitude','longitude','locationText','vulnerabilityOther','relationshipOther']);
+    for(const [name,value] of Object.entries(draft.values))if(allowed.has(name))this.editorValues[name]=value;
+    if(this.currentResource==='residents')this.updateResidentAge(String(this.editorValues['dateOfBirth']??''));
+    this.editorStep=Math.min(draft.step,this.editorSections.length-1);this.editorDraftPending=false;this.editorDraftSaved=true;this.editorDirty=true;this.changeDetector.detectChanges();
+  }
+  discardBrowserDraft(){removeDraft(this.editorDraftKey);this.editorDraft=undefined;this.editorDraftPending=false;this.editorDraftSaved=false;this.editorDraftError='';}
+  keepDraftAndClose(){this.saveEditorDraft();if(this.editorDraftSaved)this.closeEditor(false);}
+  savePublicDraft(form:HTMLFormElement){
+    if(this.publicDraftPending)return;
+    const draft:FormDraft={values:draftValues(new FormData(form).entries()),step:0,updatedAt:Date.now(),hasPhotos:[...new FormData(form).values()].some(v=>v instanceof File&&v.size>0)};
+    this.publicDraftSaved=writeDraft(draftKey('public','flood-report'),draft);
+    this.publicDraftError=this.publicDraftSaved?'':'Browser draft unavailable. Keep this form open until the report is submitted.';
+    this.publicDraft=draft;
+  }
+  resumePublicDraft(){this.publicDraftValues={...this.publicDraft?.values};this.publicDraftPending=false;this.publicDraftSaved=true;}
+  clearPublicDraft(form:HTMLFormElement,picker:LocationPickerComponent){form.reset();picker.clear();removeDraft(draftKey('public','flood-report'));this.publicDraft=undefined;this.publicDraftValues={};this.publicDraftPending=false;this.publicDraftSaved=false;this.publicDraftError='';}
+  reloadPublicDraft(){this.publicDraft=readDraft(draftKey('public','flood-report'));this.publicDraftPending=!!this.publicDraft;this.publicDraftValues={};this.publicDraftSaved=false;this.publicDraftError='';}
+  discardEditorPrompt = false;
+  private editorTrigger: HTMLElement | null = null;
+  readonly shortRecordId = shortRecordId;
+
+  get editorSections() {
+    return editorFieldSections(this.currentResource, this.editorFields);
+  }
+
+  get editorIsWizard() { return this.editorSections.length > 1; }
+  get editorStepCount() { return this.editorSections.length + 1; }
+  get editorStepTitle() { return this.editorSections[this.editorStep]?.title ?? 'Review and save'; }
+
+  changeEditorStep(step: number) {
+    if (this.loading || this.discardEditorPrompt) return;
+    const form = document.querySelector<HTMLFormElement>('#record-editor form');
+    if (step > this.editorStep && form) {
+      if (step === this.editorSections.length) {
+        for (let index = 0; index < this.editorSections.length; index++) if (!this.validateEditorStep(form, index)) return;
+        const values = new FormData(form);
+        this.editorReview = this.editorSections.map(section => ({ title: section.title, fields: section.fields.map(field => {
+          const raw = String(values.get(field.name) ?? '');
+          let value = field.type === 'household-lookup' ? this.selectedHouseholdLabel : field.type === 'location' ? 'Pinned on map' : field.options?.find(option => option.value === raw)?.label ?? raw;
+          if (raw === 'Other') value += `: ${values.get(field.name === 'vulnerabilityType' ? 'vulnerabilityOther' : 'relationshipOther') || 'Not specified'}`;
+          return { label: field.label, value: value || 'Not provided' };
+        }) }));
+      } else if (!this.validateEditorStep(form, this.editorStep)) return;
+    }
+    this.editorStep = step;
+    if(this.editorDirty)this.saveEditorDraft();
+    this.editorStepsExpanded = false;
+    this.changeDetector.detectChanges();
+    const section = document.querySelector<HTMLElement>('#record-editor .editor-section:not([hidden]), #record-editor .editor-review:not([hidden])');
+    section?.focus();
+    section?.scrollIntoView({ block: 'nearest' });
+  }
+
+  private validateEditorStep(form: HTMLFormElement, step: number): boolean {
+    const section = form.querySelectorAll<HTMLFieldSetElement>('.editor-section')[step];
+    const invalid = Array.from(section?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input,select,textarea') ?? []).find(control => !control.checkValidity());
+    const fields = this.editorSections[step]?.fields ?? [];
+    const values = new FormData(form);
+    let message = '';
+    for (const field of fields.filter(field => ['contactNumber', 'emergencyContactNumber'].includes(field.name))) {
+      if (!validPhilippineContactNumber(values.get(field.name))) {
+        this.fieldErrors[field.name] = 'Enter a valid Philippine mobile or landline number.';
+        this.editorStep = step;
+        this.changeDetector.detectChanges();
+        this.focusEditorField(form, field.name);
+        return false;
+      }
+      delete this.fieldErrors[field.name];
+    }
+    if (fields.some(field => field.type === 'household-lookup') && !this.editorValue('householdId')) message = 'Select a household for this resident.';
+    if (fields.some(field => field.type === 'location') && (!values.get('latitude') || !values.get('longitude'))) message = 'Pin the location on the map before continuing.';
+    if (invalid || message) {
+      this.editorStep = step;
+      this.errorMessage = message;
+      this.changeDetector.detectChanges();
+      if (invalid) { invalid.reportValidity(); invalid.focus(); }
+      else { (section?.querySelector<HTMLElement>('.lookup-trigger') ?? section)?.focus(); }
+      return false;
+    }
+    this.errorMessage = '';
+    return true;
+  }
+
+  get navGroups() {
+    return [
+      { label: 'Overview', ids: ['dashboard', 'statistics'] },
+      { label: 'Emergency operations', ids: ['dss', 'map', 'reports', 'evacuation', 'notifications'] },
+      { label: 'Community records', ids: ['residents', 'households'] },
+      { label: 'Administration', ids: ['users'] }
+    ].map(group => ({ label: group.label, items: this.visibleNavItems.filter(item => group.ids.includes(item.id)) })).filter(group => group.items.length);
+  }
+
+  dashboardAttention?: { pending: number | '—'; residents: number | '—'; shelters: number | '—' };
+  zoneAssessment?: DssData;
+  selectedZoneId = '';
+  zoneAssessmentLoading = false;
+  zoneAssessmentError = '';
+  get selectedZone() { return this.zoneAssessment?.zones.find(zone => zone.id === this.selectedZoneId); }
+  get selectedZoneShelters() { return this.zoneAssessment?.shelters.filter(shelter => shelter.zoneId === this.selectedZoneId) ?? []; }
+
+  loadZoneAssessment() {
+    this.zoneAssessmentLoading = true;
+    this.zoneAssessmentError = '';
+    this.api.decisionSupport({}).pipe(finalize(() => { this.zoneAssessmentLoading = false; this.changeDetector.detectChanges(); })).subscribe({
+      next: data => this.zoneAssessment = data,
+      error: () => this.zoneAssessmentError = 'Zone assessment could not be loaded. Retry to see current response details.'
+    });
+  }
+
+  selectMapZone(id: string) {
+    this.selectedZoneId = id;
+    this.selectedMapFocus = undefined;
+    const record = this.publicMapData['zones']?.find((zone: Record<string, unknown>) => zone['zone_id'] === id);
+    if (record) this.selectedMapFocus = { id, resource: 'barangay-zones', record, nonce: Date.now() };
+    this.changeDetector.detectChanges();
+    if (id && window.innerWidth <= 1100) document.getElementById('zone-response-title')?.scrollIntoView({ block: 'start' });
+  }
+
+  openResponseResidents(zone = '', status = 'For Evacuation') {
+    this.setPage(this.canOpenDashboardMetric('residents') ? 'residents' : 'evacuation');
+    if (this.activePage === 'evacuation') this.selectResource('residents');
+    this.resourceFilters = { zone, status };
+    this.loadResource();
+  }
+
+  openPendingReports() {
+    if (!this.canReviewReports) return;
+    this.setPage('reports');
+    this.resourceFilters = { pending: 'true' };
+    this.loadResource();
+  }
+
+  get editorRecordLabel() {
+    const names: Record<string, string> = { residents: 'resident', households: 'household', users: 'user account', shelters: 'evacuation center', volunteers: 'volunteer', notifications: 'advisory', 'emergency-contacts': 'emergency hotline', 'barangay-zones': 'barangay zone', 'risk-zones': 'risk zone', 'evacuation-routes': 'evacuation route', 'flood-reports': 'flood report' };
+    return names[this.currentResource] ?? 'record';
+  }
+
+  get activeFilterChips() {
+    const labels: Record<string, string> = { incomplete:'Incomplete basics',emergencyContact:'Incomplete emergency contact',unassigned:'Evacuation center missing',missingZone:'Validated report without zones',pending: 'Awaiting review', zone: 'Zone', household: 'Household', vulnerability: 'Vulnerability', vulnerable: 'Vulnerable residents', status: 'Status', priority: 'Priority', severity: 'Severity', incidentType: 'Incident', dateFrom: 'From', dateTo: 'To', shelter: 'Evacuation center' };
+    return Object.entries(this.resourceFilters).filter(([, value]) => value).map(([key, value]) => ({ key, label: labels[key] ?? key, value: key === 'zone' ? this.zoneOptions.find(option => option.value === value)?.label ?? shortRecordId(value) : key === 'household' ? this.householdOptions.find(option => option.value === value)?.label ?? shortRecordId(value) : key === 'pending' ? 'Submitted / Under Review' : value === 'true' ? 'Yes' : shortRecordId(value) }));
+  }
+
+  removeFilter(key: string) {
+    if (key === 'search') this.searchTerm = '';
+    else delete this.resourceFilters[key];
+    this.page = 1;
+    this.loadResource();
+  }
+
+  resetSearchAndFilters() {
+    this.searchTerm = '';
+    this.clearResourceFilters();
+  }
+
+  requestCloseEditor() {
+    if (this.loading) return;
+    if (!this.editorDirty) return this.closeEditor(false);
+    this.discardEditorPrompt = true;
+    this.changeDetector.detectChanges();
+    document.getElementById('keep-editing')?.focus();
+  }
+
+  keepEditing() {
+    this.discardEditorPrompt = false;
+    this.changeDetector.detectChanges();
+    document.querySelector<HTMLButtonElement>('#record-editor .modal-close')?.focus();
+  }
+
+  @HostListener('window:beforeunload', ['$event'])
+  protectUnsavedEditor(event: BeforeUnloadEvent) {
+    if (this.editorOpen && this.editorDirty) {
+      this.saveEditorDraft();
+      if(!this.editorDraftSaved||this.editorDraft?.hasPhotos){event.preventDefault();event.returnValue='';}
+    }
+  }
+
+  editorKeydown(event: KeyboardEvent) {
+    if (this.householdLookupOpen) return;
+    if (event.key === 'Escape') { event.preventDefault(); this.discardEditorPrompt ? this.keepEditing() : this.requestCloseEditor(); }
+    if (event.key !== 'Tab') return;
+    const controls = Array.from(document.querySelectorAll<HTMLElement>('#record-editor button:not(:disabled), #record-editor input:not([type=hidden]):not(:disabled), #record-editor select:not(:disabled), #record-editor textarea:not(:disabled), #record-editor a[href]')).filter(control => !control.closest('[inert]') && control.getClientRects().length > 0);
+    const first = controls[0], last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  }
   editorId = '';
+  reportReviewOptions: EditorOption[] = [];
+  reportReviews: ReportReview[] = [];
+  reportReviewReady = false;
+  editorReportStatus = '';
+  householdDetails?: HouseholdDetails;
+  residentDetails?:ResidentDetails;
+  residentDetailsLoading=false;
+  residentDetailsError='';
+  private residentDetailsRequest=0;
+  quality?:Record<string,number>;
+  qualityError='';
+  readonly qualityCards=[{key:'incomplete',title:'Incomplete resident basics',hint:'Name, birth date, sex, address, or household missing'}, {key:'emergencyContact',title:'Emergency contacts incomplete',hint:'Contact name or number missing'}, {key:'unassigned',title:'Evacuation center not assigned',hint:'Residents marked For Evacuation or Evacuated'}, {key:'pending',title:'Reports awaiting review',hint:'Submitted and under review'}, {key:'missingZone',title:'Validated reports without zones',hint:'Affected zones need to be linked'}];
+  get householdReadiness(){const members=this.householdDetails?.members??[];return {contacts:members.filter(m=>m.flags.includes('Emergency contact incomplete')).length,unassigned:members.filter(m=>m.flags.includes('Evacuation center not assigned')).length,assistance:members.filter(m=>m.needsAssistance).length};}
+  loadRecordQuality(){
+    this.quality=undefined;this.qualityError='';
+    this.api.get<Record<string,number>>('records','quality').subscribe({next:quality=>{this.quality=quality;this.changeDetector.detectChanges();},error:()=>{this.qualityError='Record quality checks could not be loaded. Refresh to retry.';this.changeDetector.detectChanges();}});
+  }
+  openQualityRecords(key:string){
+    if(['pending','missingZone'].includes(key)){if(!this.canReviewReports)return;this.setPage('reports');}
+    else {this.setPage(this.canOpenDashboardMetric('residents')?'residents':'evacuation');if(this.activePage==='evacuation')this.selectResource('residents');this.selectedResidentYear=this.currentResidentYear;}
+    this.resourceFilters={[key]:'true'};this.loadResource();
+  }
+  openResidentDetails(row:{id:string},dialog:HTMLDialogElement){
+    const request=++this.residentDetailsRequest;this.residentDetails=undefined;this.residentDetailsError='';this.residentDetailsLoading=true;dialog.showModal();
+    this.api.get<ResidentDetails>('residents',row.id+'/details').subscribe({next:details=>{if(request!==this.residentDetailsRequest)return;this.residentDetails=details;this.residentDetailsLoading=false;this.changeDetector.detectChanges();},error:()=>{if(request!==this.residentDetailsRequest)return;this.residentDetailsError='Resident profile could not be loaded. Close and retry.';this.residentDetailsLoading=false;this.changeDetector.detectChanges();}});
+  }
+  editProfile(dialog:HTMLDialogElement){const id=this.residentDetails?.resident['resident_id'];if(!id)return;dialog.close();this.setPage('residents');this.api.get<Record<string,unknown>>('residents',id).subscribe({next:r=>{this.rawRecords.set(id,r);this.openEditor({id});},error:()=>{this.errorMessage='Resident could not be loaded for editing.';this.changeDetector.detectChanges();}});}
+  householdDetailsLoading = false;
+  householdDetailsError = '';
+  private householdDetailsRequest = 0;
   editorValues: Record<string, unknown> = {};
   fieldErrors: Record<string, string> = {};
   temporaryPassword = '';
@@ -111,7 +448,7 @@ export class App implements OnInit, OnDestroy {
   readonly incidentLevels = ['Information', 'Minor Incident', 'Major Incident'];
   selectedPublicMapFocus?: { id: string; resource: string; record: Record<string, unknown>; nonce: number };
   selectedPublicIncident?: Record<string, unknown>;
-  dssInitialTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology' = 'overview';
+  dssInitialTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology' = 'reports';
   viewingAdminIncident = false;
   today = new Intl.DateTimeFormat('en-PH', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date());
   readonly liveNow = signal(new Date());
@@ -122,6 +459,7 @@ export class App implements OnInit, OnDestroy {
 
   navItems: { id: PageId; label: string; icon: string; badge?: number }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: '⌂' },
+    { id: 'dss', label: 'Decision Support (DSS)', icon: '◇' },
     { id: 'map', label: 'Live Map & GIS', icon: '⌖' },
     { id: 'reports', label: 'Flood Reports', icon: '!' },
     { id: 'residents', label: 'Residents', icon: '♙' },
@@ -139,7 +477,8 @@ export class App implements OnInit, OnDestroy {
     residents: { eyebrow: 'COMMUNITY RECORDS', title: 'Residents', description: 'Manage resident information, vulnerability, and evacuation priority.', action: 'Add resident' },
     households: { eyebrow: 'COMMUNITY RECORDS', title: 'Households', description: 'Organize residents by household, zone, and current risk.', action: 'Add household' },
     evacuation: { eyebrow: 'RESPONSE OPERATIONS', title: 'Evacuation Support', description: 'Coordinate shelters, volunteers, and emergency contacts.', action: 'Add shelter' },
-    statistics: { eyebrow: 'DECISION SUPPORT', title: 'Reports & Statistics', description: 'Turn validated reports and zone data into actionable priorities.', action: 'Export summary' },
+    statistics: { eyebrow: 'REPORTING', title: 'Reports & Statistics', description: 'Review incident statistics and flood susceptibility references.', action: 'Export summary' },
+    dss: { eyebrow: 'DECISION SUPPORT', title: 'Decision Support System', description: 'Assess zone priorities, assistance needs, and shelter readiness.', action: 'Situation report' },
     notifications: { eyebrow: 'PUBLIC INFORMATION', title: 'Notifications', description: 'Create, send, and archive official flood advisories.', action: 'New advisory' },
     users: { eyebrow: 'SYSTEM ADMINISTRATION', title: 'User Accounts', description: 'Manage authorized local authority access and roles.', action: 'Add user' }
   };
@@ -286,13 +625,13 @@ export class App implements OnInit, OnDestroy {
       residents: [
         { name: 'householdId', label: 'Household', type: 'household-lookup', required: true, options: this.householdOptions },
         { name: 'fullName', label: 'Full name', required: true },
-        { name: 'age', label: 'Age', type: 'number' },
+        { name: 'age', label: 'Age (calculated)', type: 'number' },
         { name: 'dateOfBirth', label: 'Date of birth', type: 'date', required: true },
         { name: 'sex', label: 'Sex', type: 'select', required: true, options: options('Female', 'Male', 'Intersex', 'Prefer not to say', 'Not recorded') },
         { name: 'contactNumber', label: 'Contact number', type: 'tel', placeholder: '0917 123 4567 or (054) 123 4567' }, { name: 'addressLine', label: 'Address', required: true },
         { name: 'relationshipToHead', label: 'Relationship to household head', type: 'select', options: options('Head', 'Daughter', 'Son', 'Wife', 'Husband', 'Grandson', 'Granddaughter', 'Relatives', 'Brother', 'Sister', 'Live-in partner', 'Nephew', 'Other') },
         { name: 'vulnerabilityType', label: 'Vulnerability', type: 'select', options: options('Elderly', 'Child', 'Disability', 'Pregnant', 'Mobility-limited', 'Other') },
-        { name: 'maritalStatus', label: 'Status', type: 'select', options: options('Widow', 'Single', 'Married') },
+        { name: 'maritalStatus', label: 'Marital status', type: 'select', options: options('Widow', 'Single', 'Married') },
         { name: 'outOfSchoolYouth', label: 'Out of school youth', type: 'select', options: options('Yes', 'No') },
         { name: 'occupation', label: 'Occupation' }, { name: 'education', label: 'Education' },
         { name: 'philsysNumber', label: 'PhilSys number' }, { name: 'philhealthNumber', label: 'PhilHealth number' },
@@ -348,10 +687,10 @@ export class App implements OnInit, OnDestroy {
       ],
       reports: [
         ...(this.editorId ? [
-          { name: 'status', label: 'New status', type: 'select' as const, required: true, options: options('Under Review', 'Validated', 'Rejected', 'Resolved') },
+          { name: 'status', label: 'Review decision', type: 'select' as const, required: true, options: this.reportReviewOptions },
           { name: 'severityLevel', label: 'Incident level', type: 'select' as const, required: true, options: options('Information', 'Minor Incident', 'Major Incident') },
-          { name: 'validationNotes', label: 'Reviewer notes (optional)', type: 'textarea' as const },
-          { name: 'zoneIds', label: 'Affected Barangay Zones', type: 'multiselect' as const, required: true, options: this.zoneOptions }
+          { name: 'validationNotes', label: 'Reviewer notes (required to reject or resolve)', type: 'textarea' as const, required:['Rejected','Resolved'].includes(String(this.editorValues['status'])) },
+          { name: 'zoneIds', label: 'Affected Barangay Zones', type: 'multiselect' as const, required:['Validated','Resolved'].includes(String(this.editorValues['status'])), options: this.zoneOptions }
         ] : [
           { name: 'reporterName', label: 'Reporter name' },
           { name: 'reporterContactInfo', label: 'Reporter contact information' },
@@ -495,6 +834,7 @@ export class App implements OnInit, OnDestroy {
   }
 
   navigatePublic(page: PublicPage, replace = false) {
+    if(page==='report'&&this.publicPage!=='report')this.reloadPublicDraft();
     this.publicPage = page;
     this.requestedAdminPage = undefined;
     const path: Record<PublicPage, string> = {
@@ -523,6 +863,7 @@ export class App implements OnInit, OnDestroy {
       '/login': 'login'
     };
     if (publicRoutes[path]) {
+      if(publicRoutes[path]==='report'&&this.publicPage!=='report')this.reloadPublicDraft();
       this.publicPage = publicRoutes[path]!;
       this.requestedAdminPage = undefined;
       sessionStorage.setItem('bantayBahaRoute', path);
@@ -635,6 +976,30 @@ export class App implements OnInit, OnDestroy {
     this.selectedPublicIncident = report;
     this.clearAdminReportPhotos();
     this.loadAdminReportPhotos(row.id, report['photo_urls'] ?? report['photoUrls']);
+    this.reportReviews=[];
+    this.api.get<FloodReportDetails>('flood-reports',row.id).subscribe({next:details=>{
+      if (!this.viewingAdminIncident || this.selectedPublicIncident?.['report_id'] !== row.id) return;
+      this.selectedPublicIncident=details;this.reportReviews=details.reviews;this.changeDetector.detectChanges();
+    },error:()=>{if (this.viewingAdminIncident && this.selectedPublicIncident?.['report_id']===row.id) this.selectedPublicIncident['history_error']='Report history could not be loaded. Close and retry.';this.changeDetector.detectChanges();}});
+  }
+
+  openHouseholdDetails(row: {id:string}, dialog:HTMLDialogElement) {
+    const request=++this.householdDetailsRequest;
+    this.householdDetails=undefined;this.householdDetailsError='';this.householdDetailsLoading=true;
+    dialog.showModal();
+    this.api.get<HouseholdDetails>('households',`${row.id}/details`).subscribe({next:details=>{
+      if (request!==this.householdDetailsRequest) return;
+      this.householdDetails=details;this.householdDetailsLoading=false;this.changeDetector.detectChanges();
+    },error:error=>{
+      if (request!==this.householdDetailsRequest) return;
+      this.householdDetailsError=error?.error?.message ?? 'Household details could not be loaded. Close and retry.';
+      this.householdDetailsLoading=false;this.changeDetector.detectChanges();
+    }});
+  }
+  openHouseholdMembers(dialog:HTMLDialogElement) {
+    const id=this.householdDetails?.household.household_id;
+    if (!id) return;
+    dialog.close();this.setPage('residents');this.selectedResidentYear=this.currentResidentYear;this.resourceFilters={household:id};this.loadResource();
   }
 
   viewReportLocation() {
@@ -658,6 +1023,7 @@ export class App implements OnInit, OnDestroy {
     this.errorMessage = '';
     this.successMessage = '';
     const reportForm = event.currentTarget as HTMLFormElement;
+    this.savePublicDraft(reportForm);
     const values = new FormData(reportForm);
     const location = String(values.get('locationText') ?? '');
     const latitude = String(values.get('latitude') ?? '');
@@ -689,8 +1055,7 @@ export class App implements OnInit, OnDestroy {
     this.loading = true;
     this.api.submitFloodReport(form).pipe(finalize(() => this.finishLoading())).subscribe({
       next: ({ trackingCode }) => {
-        reportForm.reset();
-        locationPicker.clear();
+        this.clearPublicDraft(reportForm,locationPicker);
         this.errorMessage = '';
         this.showPublicToast(`Report submitted successfully. Tracking code: ${trackingCode}`);
         this.loadPublicData();
@@ -715,6 +1080,8 @@ export class App implements OnInit, OnDestroy {
   }
 
   loadDashboard() {
+    this.loadRecordQuality();
+    this.dashboardAttention = undefined;
     this.refreshPendingReportCount();
     this.loading = true;
     forkJoin({
@@ -728,6 +1095,7 @@ export class App implements OnInit, OnDestroy {
       ,weather: this.api.currentWeather().pipe(catchError(() => of(null)))
     }).pipe(finalize(() => this.finishLoading())).subscribe({
       next: ({ summary, reports, alert, notifications, shelters, risk, priorities, weather }) => {
+        this.dashboardAttention = { pending: dashboardCount(summary.pendingReports), residents: dashboardCount(summary.forEvacuationResidents), shelters: dashboardCount(summary.nearCapacityShelters) };
         this.metrics[0]!.value = String(summary.totalResidents ?? 0);
         this.metrics[0]!.note = `${summary.highPriorityResidents ?? 0} high · ${summary.mediumPriorityResidents ?? 0} medium · ${summary.lowPriorityResidents ?? 0} low priority`;
         this.metrics[1]!.value = String(summary.totalHouseholds ?? 0);
@@ -884,6 +1252,9 @@ export class App implements OnInit, OnDestroy {
       if (page === 'residents') this.loadHouseholdOptions();
     }
     if (page === 'map') {
+      this.zoneAssessment = undefined;
+      this.selectedZoneId = '';
+      this.loadZoneAssessment();
       this.currentResource = 'barangay-zones';
       this.setAdminMapLayer('barangay-zones');
       this.page = 1;
@@ -891,8 +1262,8 @@ export class App implements OnInit, OnDestroy {
       this.loadResource();
       return;
     }
-    if (page === 'statistics') {
-      this.currentResource = 'statistics';
+    if (page === 'statistics' || page === 'dss') {
+      this.currentResource = page;
       this.sortBy = '';
       this.loading = false;
       return;
@@ -1009,6 +1380,8 @@ export class App implements OnInit, OnDestroy {
 
   loadResource() {
     if (!this.currentResource) return;
+    this.errorMessage = '';
+    this.resourceLoadError = '';
     const resource = this.currentResource;
     const requestId = ++this.resourceRequestId;
     this.loading = true;
@@ -1041,6 +1414,7 @@ export class App implements OnInit, OnDestroy {
           this.totalItems = 0;
           this.totalPages = 1;
           this.errorMessage = error?.error?.message ?? 'Resident snapshot data could not be loaded.';
+          this.resourceLoadError = this.errorMessage;
           this.changeDetector.detectChanges();
         }
       });
@@ -1068,6 +1442,7 @@ export class App implements OnInit, OnDestroy {
         this.totalItems = 0;
         this.totalPages = 1;
         this.errorMessage = error?.error?.message ?? `${this.currentPage.title} data could not be loaded.`;
+        this.resourceLoadError = this.errorMessage;
         this.changeDetector.detectChanges();
       }
     });
@@ -1078,6 +1453,19 @@ export class App implements OnInit, OnDestroy {
     this.searchTerm = value.trim();
     this.page = 1;
     this.loadResource();
+  }
+
+  openResourceFilters(dialog: HTMLDialogElement) {
+    for (const field of dialog.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input[name], select[name]')) {
+      field.value = field.name === 'vulnerability' && this.resourceFilters['vulnerable'] === 'true'
+        ? 'Any' : this.resourceFilters[field.name] ?? '';
+    }
+    dialog.showModal();
+  }
+  reviewViewedReport() {
+    const id=String(this.selectedPublicIncident?.['report_id'] ?? '');
+    if (!id) return;
+    this.closePublicIncident();this.openEditor({id});
   }
 
   applyReportFilters(zone: string, severity: string, status: string, incidentType: string, dateFrom: string, dateTo: string) {
@@ -1267,10 +1655,18 @@ export class App implements OnInit, OnDestroy {
 
   openEditor(row?: { id: string }) {
     if (this.activePage === 'residents' && this.isHistoricalResidentYear) return;
+    this.editorTrigger = document.activeElement as HTMLElement | null;
+    this.editorStep = 0;
+    this.editorStepsExpanded = false;
+    this.editorReview = [];
+    this.editorDirty = false;
+    this.discardEditorPrompt = false;
     this.clearAdminReportPhotos();
     this.householdLookupOpen = false;
     this.householdLookupQuery = '';
     this.editorId = row?.id ?? '';
+    this.editorDraft=readDraft(this.editorDraftKey);this.editorDraftPending=!!this.editorDraft;this.editorDraftSaved=false;this.editorDraftError='';this.editorDetailsLoading=false;
+    this.reportReviewReady=false;this.reportReviewOptions=[];this.reportReviews=[];this.editorReportStatus='';
     const record = row ? this.rawRecords.get(row.id) : undefined;
     this.editorValues = {};
     this.fieldErrors = {};
@@ -1304,15 +1700,27 @@ export class App implements OnInit, OnDestroy {
       this.editorValues['relationshipOther'] = record['relationship_other'] ?? record['relationshipOther'] ?? '';
     }
     this.editorOpen = true;
+    this.changeDetector.detectChanges();
+    document.querySelector<HTMLButtonElement>('#record-editor .modal-close')?.focus();
     this.errorMessage = '';
     this.successMessage = '';
     if (this.activePage === 'residents') this.loadHouseholdOptions();
     if (this.editorFields.some((field) => ['zoneId', 'zoneIds', 'assignedZoneId', 'originZoneId'].includes(field.name))) this.loadZoneOptions();
     if (this.editorFields.some((field) => ['destinationShelterId', 'evacuationShelterId'].includes(field.name))) this.loadShelterOptions();
     if (this.activePage === 'reports' && this.editorId) {
+      this.editorDetailsLoading=true;
       this.loadAdminReportPhotos(this.editorId, record?.['photo_urls'] ?? record?.['photoUrls']);
-      this.api.get<Record<string, unknown>>('flood-reports', this.editorId).subscribe({
+      this.api.get<FloodReportDetails>('flood-reports', this.editorId).subscribe({
         next: (report) => {
+          if (!this.editorOpen || this.editorId!==row?.id) return;
+          this.editorReportStatus=String(report['status']);
+          this.editorValues['severityLevel']=report['severity_level'];
+          this.reportReviewOptions=report.allowed_statuses.map(status=>({value:status,label:status}));
+          this.reportReviews=report.reviews;
+          this.editorValues['validationNotes']=report['validation_notes'] ?? '';
+          this.editorValues['status']=this.reportReviewOptions.some(option=>option.value===this.editorReportStatus)?this.editorReportStatus:this.reportReviewOptions[0]?.value ?? '';
+          this.reportReviewReady=true;
+          this.editorDetailsLoading=false;
           const assigned = report['affected_zone_ids'];
           let zoneIds: unknown[] = [];
           try { zoneIds = Array.isArray(assigned) ? assigned : typeof assigned === 'string' ? JSON.parse(assigned) : []; }
@@ -1320,10 +1728,11 @@ export class App implements OnInit, OnDestroy {
           this.editorValues['zoneIds'] = zoneIds.filter(Boolean).map(String);
           this.changeDetector.detectChanges();
         },
-        error: (error) => this.errorMessage = error?.error?.message ?? 'Report details could not be loaded.'
+        error: (error) => {this.editorDetailsLoading=false;this.errorMessage = error?.error?.message ?? 'Report details could not be loaded.';}
       });
     }
     if (this.currentResource === 'notifications' && this.editorId) {
+      this.editorDetailsLoading=true;
       this.api.get<Record<string, unknown>>('notifications', this.editorId).subscribe({
         next: (notification) => {
           if (!this.editorOpen || this.editorId !== row?.id) return;
@@ -1334,9 +1743,10 @@ export class App implements OnInit, OnDestroy {
           }
           this.editorValues['zoneIds'] = (notification['zone_ids'] as unknown[] ?? []).map(String);
           this.editorValues['status'] = notification['status'] ?? '';
+          this.editorDetailsLoading=false;
           this.changeDetector.detectChanges();
         },
-        error: (error) => this.errorMessage = error?.error?.message ?? 'Notification details could not be loaded.'
+        error: (error) => {this.editorDetailsLoading=false;this.errorMessage = error?.error?.message ?? 'Notification details could not be loaded.';}
       });
     }
   }
@@ -1347,14 +1757,17 @@ export class App implements OnInit, OnDestroy {
   }
 
   selectHousehold(option: EditorOption) {
+    this.editorDirty = true;
     this.editorValues['householdId'] = option.value;
     this.householdLookupOpen = false;
     this.householdLookupQuery = '';
+    this.changeDetector.detectChanges();this.saveEditorDraft();
   }
 
   focusMapRecord(row: { id: string }) {
     const record = this.rawRecords.get(row.id);
     if (!record) return;
+    if (this.currentResource === 'barangay-zones') this.selectedZoneId = row.id;
     this.selectedMapFocus = {
       id: row.id,
       resource: this.currentResource,
@@ -1414,14 +1827,15 @@ export class App implements OnInit, OnDestroy {
     });
   }
 
-  deleteSelectedResident() {
-    if (this.activePage !== 'residents' || !this.editorId || this.loading) return;
-    const name = String(this.editorValues['fullName'] ?? 'this resident');
+  deleteSelectedResident(row?: { id: string; name: string }) {
+    const residentId = row?.id ?? this.editorId;
+    if (this.activePage !== 'residents' || this.isHistoricalResidentYear || !this.canManageCurrentResource || !residentId || this.loading) return;
+    const name = row?.name ?? String(this.editorValues['fullName'] ?? 'this resident');
     if (!window.confirm(`Delete ${name}? This action cannot be undone.`)) return;
     this.loading = true;
-    this.api.delete('residents', this.editorId).pipe(finalize(() => this.finishLoading())).subscribe({
+    this.api.delete('residents', residentId).pipe(finalize(() => this.finishLoading())).subscribe({
       next: () => {
-        this.closeEditor();
+        if (this.editorOpen && this.editorId === residentId) this.closeEditor();
         this.successMessage = 'Resident deleted successfully.';
         this.loadResource();
       },
@@ -1513,10 +1927,18 @@ export class App implements OnInit, OnDestroy {
   }
 
   saveEditor(event: Event) {
+    this.saveEditorDraft();
     event.preventDefault();
+    if (this.activePage==='reports' && this.editorId && !this.reportReviewReady) {
+      this.errorMessage='Wait for the report details to load before saving a review.';return;
+    }
     this.errorMessage = '';
     this.successMessage = '';
     const form = event.currentTarget as HTMLFormElement;
+    if (this.editorIsWizard) {
+      if (this.editorStep < this.editorSections.length) { this.changeEditorStep(this.editorStep + 1); return; }
+      for (let step = 0; step < this.editorSections.length; step++) if (!this.validateEditorStep(form, step)) return;
+    }
     this.fieldErrors = {};
     const formData = new FormData(form);
     const raw = Object.fromEntries(formData.entries()) as Record<string, unknown>;
@@ -1597,7 +2019,7 @@ export class App implements OnInit, OnDestroy {
     const request = this.activePage === 'reports' && !this.editorId
       ? this.api.submitFloodReport(formData)
       : this.activePage === 'reports'
-      ? this.api.updateReportStatus(this.editorId, raw as { status: string; severityLevel: string; validationNotes?: string; zoneIds: string[] })
+      ? this.api.updateReportStatus(this.editorId, { ...raw, expectedStatus:this.editorReportStatus } as { expectedStatus:string; status: string; severityLevel: string; validationNotes?: string; zoneIds: string[] })
       : this.editorId
         ? this.api.update(resources[this.activePage]!, this.editorId, raw)
         : this.api.create(resources[this.activePage]!, raw);
@@ -1669,6 +2091,8 @@ export class App implements OnInit, OnDestroy {
   }
 
   private focusEditorField(form: HTMLFormElement, name: string) {
+    const step = this.editorSections.findIndex(section => section.fields.some(field => field.name === name));
+    if (this.editorIsWizard && step >= 0) { this.editorStep = step; this.changeDetector.detectChanges(); }
     window.requestAnimationFrame(() => (form.elements.namedItem(name) as HTMLElement | null)?.focus());
   }
 
@@ -1697,17 +2121,20 @@ export class App implements OnInit, OnDestroy {
     });
   }
 
-  closeEditor() {
+  closeEditor(clearDraft=true) {
+    if(clearDraft)this.discardBrowserDraft();
     this.clearAdminReportPhotos();
     this.householdLookupOpen = false;
     this.householdLookupQuery = '';
     this.editorOpen = false;
+    this.editorDirty = false;
+    this.discardEditorPrompt = false;
     this.editorId = '';
     this.editorValues = {};
     this.fieldErrors = {};
-    this.fieldErrors = {};
     this.errorMessage = '';
     this.changeDetector.detectChanges();
+    this.editorTrigger?.focus();
   }
 
   reportPhotoCount(report: Record<string, unknown>) {
@@ -1743,7 +2170,7 @@ export class App implements OnInit, OnDestroy {
 
   reportStatusLabel(row: { id: string }) {
     const status = String(this.reportTableRecord(row)['status'] ?? 'Submitted');
-    return ({ Submitted: 'New', 'Under Review': 'Monitored', Validated: 'Verified' } as Record<string, string>)[status] ?? status;
+    return status;
   }
 
   reportStatusClass(row: { id: string }) {
@@ -1904,6 +2331,10 @@ export class App implements OnInit, OnDestroy {
       icon: severity === 'Major Incident' ? '!' : severity === 'Minor Incident' ? '≈' : 'i',
       time: this.formatDate(row['created_at'] ?? row['createdAt'])
     };
+  }
+
+  householdMemberCount(row: {id:string}) {
+    return dashboardCount(this.rawRecords.get(row.id)?.['member_count']);
   }
 
   private mapTableRow(row: Record<string, unknown>, index: number) {

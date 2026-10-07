@@ -1,6 +1,6 @@
 export const environment = {
   production: false,
-  apiBaseUrl: 'http://localhost:3000/api',
+  apiBaseUrl: `http://${window.location.hostname}:3001/api`,
   mapCenter: [13.7828976, 122.8852784] as [number, number],
   mapInitialZoom: 14,
   mapMinZoom: 12,

@@ -5,8 +5,8 @@ export interface DssPerson {
 export interface DssData {
   generatedAt:string; scope:string; rules:string[]; filters:Record<string,string>; zoneOptions:{id:string;name:string}[];
   overall:{risk:string|null;explanation:string}; metrics:{residents:number;households:number;vulnerableResidents:number;activeReports:number;affectedZones:number;highRiskZones:number;priorityResidents:number;affectedVulnerable:number};
-  zones:{id:string;name:string;risk:string;activeReports:number;totalReports:number;repeatReports:number;residents:number;households:number;vulnerableResidents:number;affectedResidents:number;affectedHouseholds:number;affectedVulnerable:number;populationKnown:boolean;householdsKnown:boolean;explanation:string;response:string}[];
-  incidents:{total:number;active:number;resolved:number;pending:number;rejected:number;unassignedActive:number;bySeverity:{severity:string;count:number}[];recent:{id:string;code:string;location:string;severity:string;status:string;createdAt:string;zones:string[]}[]};
+  zones:{id:string;name:string;risk:string;rule:string;evidence:{id:string;code:string;severity:string;createdAt:string}[];activeReports:number;totalReports:number;repeatReports:number;residents:number;households:number;vulnerableResidents:number;affectedResidents:number;affectedHouseholds:number;affectedVulnerable:number;populationKnown:boolean;householdsKnown:boolean;explanation:string;response:string}[];
+  incidents:{total:number;active:number;resolved:number;pending:number;rejected:number;unassignedActive:number;bySeverity:{severity:string;count:number}[];activeRecords:{id:string;code:string;location:string;severity:string;status:string;createdAt:string;zones:string[]}[];recent:{id:string;code:string;location:string;severity:string;status:string;createdAt:string;zones:string[]}[]};
   vulnerable:DssPerson[]; evacuation:DssPerson[];
   priorityHouseholds:{id:string;number:string;zone:string;priority:string;risk:string;residents:number;vulnerabilities:string[];statuses:string[]}[];
   shelters:{id:string;name:string;zoneId:string;zone:string;location:string;capacity:number;occupancy:number|null;available:number|null;status:string}[];

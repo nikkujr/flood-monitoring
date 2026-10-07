@@ -41,13 +41,16 @@ export function vulnerabilities(resident: Resident, today: string): string[] {
   if (present(resident.morbidity)) labels.add('Morbidity');
   return [...labels];
 }
-export function assessRisk(reports: Report[], vulnerable: number): Risk {
+export function assessRisk(reports: Report[], vulnerable: number): {risk: Risk; rule: string} {
   const active = reports.filter(r=>r.status==='Validated');
   const major = active.some(r=>r.severity_level==='Major Incident');
-  if (active.length >= 5) return 'Critical';
-  if (major && active.length >= 2 && vulnerable > 0) return 'Critical';
-  if (active.length >= 3 || major || active.filter(r=>r.severity_level==='Minor Incident').length >= 2) return 'High';
-  return active.length ? 'Moderate' : 'Low';
+  if (active.length >= 5) return {risk:'Critical',rule:'At least 5 active validated reports in this zone.'};
+  if (major && active.length >= 2 && vulnerable > 0) return {risk:'Critical',rule:'A validated major incident, at least 2 active validated reports, and registered vulnerable residents in this zone.'};
+  if (active.length >= 3) return {risk:'High',rule:'At least 3 active validated reports in this zone.'};
+  if (major) return {risk:'High',rule:'At least 1 active validated major incident in this zone.'};
+  if (active.filter(r=>r.severity_level==='Minor Incident').length >= 2) return {risk:'High',rule:'At least 2 active validated minor incidents in this zone.'};
+  return active.length ? {risk:'Moderate',rule:'At least 1 active validated report; no higher risk rule matched.'}
+    : {risk:'Low',rule:'No active validated reports in this selection. This does not establish that the zone is safe.'};
 }
 const priorityOrder = ['Highest','High','Medium','Lower'];
 export function priorityFor(risk: Risk, vulnerable: boolean, manual: string) {
@@ -77,9 +80,9 @@ export function buildDss(source: DssSource, filters: DssFilters = {}, now = new 
     const selectedPeople = allPeople.filter(populationMatches);
     const zoneHouseholds = source.households.filter(h=>h.zone_id===zone.zone_id && (!(filters.vulnerability || filters.evacuationStatus) || selectedPeople.some(r=>r.household_id===h.household_id)));
     const active = zoneReports.filter(r=>r.status==='Validated');
-    const risk = assessRisk(zoneReports,allPeople.filter(r=>r.vulnerabilities.length).length);
+    const {risk,rule} = assessRisk(zoneReports,allPeople.filter(r=>r.vulnerabilities.length).length);
     const repeated = zoneReports.filter(r=>['Validated','Resolved'].includes(r.status)).length;
-    return {id:zone.zone_id,name:zone.zone_name,risk,activeReports:active.length,totalReports:zoneReports.length,repeatReports:repeated,
+    return {id:zone.zone_id,name:zone.zone_name,risk,rule,evidence:active.map(r=>({id:r.report_id,code:r.tracking_code,severity:r.severity_level,createdAt:r.created_at})),activeReports:active.length,totalReports:zoneReports.length,repeatReports:repeated,
       residents:selectedPeople.length,households:zoneHouseholds.length,vulnerableResidents:selectedPeople.filter(r=>r.vulnerabilities.length).length,
       affectedResidents:active.length?selectedPeople.length:0,affectedHouseholds:active.length?zoneHouseholds.length:0,
       affectedVulnerable:active.length?selectedPeople.filter(r=>r.vulnerabilities.length).length:0,
@@ -115,9 +118,7 @@ export function buildDss(source: DssSource, filters: DssFilters = {}, now = new 
   const recommendations = zoneRows.map(z=>({zone:z.name,risk:z.risk,text:z.response,reason:z.explanation}));
   const alerts = zoneRows.filter(z=>z.activeReports>=3).map(z=>({
     zoneId:z.id,zone:z.name,risk:z.risk,activeReports:z.activeReports,
-    message:z.activeReports>=5
-      ? `${z.name} has reached ${z.activeReports} active validated flood reports and is marked Critical by the report-count rule.`
-      : `${z.name} has reached ${z.activeReports} active validated flood reports and is marked High risk by the report-count rule.`
+    message:`${z.name} has ${z.activeReports} active validated flood reports and is assessed ${z.risk}. ${z.rule}`
   }));
   for (const zone of zoneRows.filter(z=>z.activeReports)) {
     const centers = shelters.filter(s=>s.zoneId===zone.id);
@@ -131,6 +132,7 @@ export function buildDss(source: DssSource, filters: DssFilters = {}, now = new 
   const unmapped = selectedReports.filter(r=>r.status==='Validated' && !links.get(r.report_id)?.size).length;
   const overallRisk = zoneRows.length ? zoneRows.reduce<Risk>((risk,z)=>riskLevels.indexOf(z.risk)>riskLevels.indexOf(risk)?z.risk:risk,'Low') : null;
   const activeCount = selectedReports.filter(r=>r.status==='Validated').length;
+  const incidentRecords = [...selectedReports].sort((a,b)=>b.created_at.localeCompare(a.created_at)).map(r=>({id:r.report_id,code:r.tracking_code,location:r.location_text,severity:r.severity_level,status:r.status,createdAt:r.created_at,zones:[...(links.get(r.report_id)??[])].map(id=>zonesById.get(id)!.zone_name)}));
   if (pending) recommendations.push({zone:'Selected reports',risk:overallRisk??'Low',text:`Validate ${pending} pending report(s) before using them to raise assessed risk.`,reason:'Submitted and Under Review reports are unverified.'});
   if (unmapped) recommendations.push({zone:'Unassigned reports',risk:overallRisk??'Low',text:`Assign affected zones to ${unmapped} active validated report(s).`,reason:'These reports cannot contribute to zone risk or resident exposure until zones are linked.'});
   return {generatedAt:now.toISOString(),filters,zoneOptions:source.zones.map(z=>({id:z.zone_id,name:z.zone_name})),rules:riskRules,
@@ -138,7 +140,7 @@ export function buildDss(source: DssSource, filters: DssFilters = {}, now = new 
     metrics:{residents:selectedPeople.length,households:zoneRows.reduce((n,z)=>n+z.households,0),vulnerableResidents:selectedPeople.filter(r=>r.vulnerabilities.length).length,activeReports:activeCount,affectedZones:zoneRows.filter(z=>z.activeReports).length,highRiskZones:zoneRows.filter(z=>['High','Critical'].includes(z.risk)).length,priorityResidents:evacuation.length,affectedVulnerable:zoneRows.reduce((n,z)=>n+z.affectedVulnerable,0)},
     zones:zoneRows,incidents:{total:selectedReports.length,active:activeCount,resolved:selectedReports.filter(r=>r.status==='Resolved').length,pending,rejected:selectedReports.filter(r=>r.status==='Rejected').length,unassignedActive:unmapped,
       bySeverity:['Information','Minor Incident','Major Incident'].map(severity=>({severity,count:selectedReports.filter(r=>r.severity_level===severity).length})),
-      recent:[...selectedReports].sort((a,b)=>b.created_at.localeCompare(a.created_at)).slice(0,10).map(r=>({id:r.report_id,code:r.tracking_code,location:r.location_text,severity:r.severity_level,status:r.status,createdAt:r.created_at,zones:[...(links.get(r.report_id)??[])].map(id=>zonesById.get(id)!.zone_name)}))},
+      recent:incidentRecords.slice(0,10),activeRecords:incidentRecords.filter(r=>r.status==='Validated')},
     vulnerable:priorities.filter(r=>r.vulnerabilities.length),evacuation,priorityHouseholds,shelters,recommendations,alerts,
     coverage:{zones:zoneRows.length,registeredPopulationKnown:zoneRows.some(z=>z.populationKnown),missingPopulationZones:zoneRows.filter(z=>!z.populationKnown).map(z=>z.name),unassignedActive:unmapped},
     scope:'Risk is a rule-based assessment of validated reports in the selected date/severity scope, not a flood forecast. Exposure is zone-wide potential exposure, not confirmed affected individuals. Date filters use report creation dates; resident and shelter data are current. Resident filters narrow counts and priority lists; shelter capacity remains physical capacity in selected zones.'};

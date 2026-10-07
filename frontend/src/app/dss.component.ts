@@ -2,8 +2,9 @@ import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, O
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { BehaviorSubject, Subscription, catchError, combineLatest, finalize, of, switchMap, timer } from 'rxjs';
-import { ApiService } from './api.service';
+import { ApiService, type ZoneStatusPreview } from './api.service';
 import type { DssData } from './dss.models';
+import { searchResidents } from './admin-ui';
 
 const emptyFilters = (): Record<string,string> => ({
   zone:'', risk:'', from:'', to:'', severity:'', evacuationStatus:'', vulnerability:''
@@ -12,24 +13,53 @@ const emptyFilters = (): Record<string,string> => ({
 @Component({selector:'app-dss',standalone:true,imports:[FormsModule,DatePipe],templateUrl:'./dss.component.html',styleUrl:'./dss.component.scss'})
 export class DssComponent implements OnInit, OnDestroy {
   @Output() navigate = new EventEmitter<{ page: string; resource?: string; filters?: Record<string, string> }>();
-  @Input() initialTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology' = 'overview';
+  @Input() initialTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology' = 'reports';
+  @Input() mode: 'dss'|'statistics' = 'dss';
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly refresh = new BehaviorSubject(0);
   private subscription?: Subscription;
+  private bulkPreviewSubscription?: Subscription;
   data: DssData | null = null;
+  reportData: DssData | null = null;
+  reportFilterLabels: string[] = [];
   loading = true;
   error = '';
+  bulkZoneId = '';
+  bulkZoneName = '';
+  bulkViewOnly = false;
+  bulkStatus = 'For Evacuation';
+  bulkPreview: ZoneStatusPreview | null = null;
+  bulkLoading = false;
+  bulkSaving = false;
+  bulkError = '';
+  bulkSuccess = '';
+  bulkSelectedIds = new Set<string>();
+  bulkSearch = '';
+  readonly bulkStatuses = ['Safe', 'For Monitoring', 'For Evacuation'];
+  get canMarkResidents() { return ['Super Admin', 'Disaster Officer', 'Data Encoder'].includes(this.api.user()?.role ?? ''); }
+  get bulkEligibleResidents() { return this.bulkPreview?.residents.filter(r => r.recordStatus === 'Active' && r.status !== 'Evacuated') ?? []; }
+  get bulkVisibleResidents() { return searchResidents(this.bulkPreview?.residents ?? [], this.bulkSearch); }
+  get bulkVisibleEligibleResidents() { return this.bulkVisibleResidents.filter(r => r.recordStatus === 'Active' && r.status !== 'Evacuated'); }
+  get bulkVisibleSelectedCount() { return this.bulkVisibleEligibleResidents.filter(r => this.bulkSelectedIds.has(r.id)).length; }
+  get bulkChangedCount() { return this.bulkEligibleResidents.filter(r => this.bulkSelectedIds.has(r.id) && r.status !== this.bulkStatus).length; }
+  get bulkAllSelected() { return this.bulkVisibleEligibleResidents.length > 0 && this.bulkVisibleSelectedCount === this.bulkVisibleEligibleResidents.length; }
+  toggleBulkResident(id: string, checked: boolean) { checked ? this.bulkSelectedIds.add(id) : this.bulkSelectedIds.delete(id); }
+  markAllBulkResidents(checked: boolean) { for (const resident of this.bulkVisibleEligibleResidents) this.toggleBulkResident(resident.id, checked); }
   filters: Record<string,string> = emptyFilters();
   draftFilters: Record<string,string> = emptyFilters();
   activeTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology' = 'overview';
-  readonly tabs = [
-    {id:'overview' as const,label:'Overview'},
-    {id:'zones' as const,label:'Zone assessment'},
-    {id:'reports' as const,label:'Reports'},
-    {id:'evacuation' as const,label:'Evacuation'},
-    {id:'methodology' as const,label:'Methodology'}
-  ];
+  get tabs() {
+    return this.mode === 'dss' ? [
+      {id:'overview' as const,label:'Response overview'},
+      {id:'zones' as const,label:'Zone assessment'},
+      {id:'evacuation' as const,label:'Assistance & shelters'},
+      {id:'methodology' as const,label:'Decision rules'}
+    ] : [
+      {id:'reports' as const,label:'Incident statistics'},
+      {id:'zones' as const,label:'Flood susceptibility reference'}
+    ];
+  }
   zoneOptions: {id:string;name:string}[] = [];
   readonly risks = ['Low','Moderate','High','Critical'];
   readonly severities = ['Information','Minor Incident','Major Incident'];
@@ -52,7 +82,7 @@ export class DssComponent implements OnInit, OnDestroy {
   readonly geoAnalyticsChart = 'conic-gradient(#e5e7eb 0 72%, #d9c8ff 72% 87.4%, #a946ed 87.4% 94.4%, #5d16e8 94.4% 100%)';
   pages: Record<string,number> = {vulnerable:1,evacuation:1,households:1};
   ngOnInit() {
-    this.activeTab = this.initialTab;
+    this.activeTab = this.mode === 'dss' ? 'overview' : this.initialTab;
     this.subscription = combineLatest([timer(0,30_000),this.refresh]).pipe(switchMap(()=>{
       if (this.filters['from'] && this.filters['to'] && this.filters['from']>this.filters['to']) {
         this.loading=false;this.error='Start date must not be after end date.';return of(null);
@@ -72,7 +102,49 @@ export class DssComponent implements OnInit, OnDestroy {
     });
   }
   ngOnDestroy() { this.subscription?.unsubscribe();this.refresh.complete(); }
+  openBulkStatus(zone: DssData['zones'][number], dialog: HTMLDialogElement, viewOnly = false) {
+    this.bulkPreviewSubscription?.unsubscribe();
+    this.bulkZoneId = zone.id;
+    this.bulkZoneName = zone.name;
+    this.bulkViewOnly = viewOnly;
+    this.bulkStatus = 'For Evacuation';
+    this.bulkPreview = null;
+    this.bulkSelectedIds = new Set();
+    this.bulkSearch = '';
+    this.bulkError = '';
+    this.bulkSuccess = '';
+    this.bulkLoading = true;
+    dialog.showModal();
+    this.bulkPreviewSubscription = this.api.previewZoneResidentStatus(zone.id).pipe(finalize(() => {
+      this.bulkLoading = false; this.cdr.markForCheck();
+    })).subscribe({
+      next: preview => {
+        if (!this.bulkViewOnly && preview.risk !== 'Critical') this.bulkError = 'This zone is no longer Critical. Refresh the DSS assessment.';
+        else this.bulkPreview = preview;
+      },
+      error: error => this.bulkError = error?.error?.message ?? 'Could not load the residents for this zone. Close and try again.'
+    });
+    this.subscription?.add(this.bulkPreviewSubscription);
+  }
+  saveBulkStatus(dialog: HTMLDialogElement) {
+    if (this.bulkViewOnly || !this.bulkPreview || this.bulkSaving || !this.bulkChangedCount) return;
+    this.bulkSaving = true;
+    this.bulkError = '';
+    this.subscription?.add(this.api.markZoneResidents(this.bulkZoneId, this.bulkStatus, this.bulkPreview.revision, [...this.bulkSelectedIds]).pipe(finalize(() => {
+      this.bulkSaving = false; this.cdr.markForCheck();
+    })).subscribe({
+      next: result => { this.bulkSuccess = result.message; dialog.close(); this.reload(); },
+      error: error => {
+        this.bulkError = error?.error?.message ?? 'The update could not be confirmed. Close and reopen to check the current statuses before retrying.';
+        this.bulkPreview = null;
+      }
+    }));
+  }
   changeFilters() { this.data=null;this.pages={vulnerable:1,evacuation:1,households:1};this.reload(); }
+  openFilters(dialog: HTMLDialogElement) {
+    this.draftFilters={...emptyFilters(),...this.filters};
+    dialog.showModal();
+  }
   applyFilters() {
     this.filters=Object.fromEntries(Object.entries(this.draftFilters).filter(([,value])=>value));
     this.changeFilters();
@@ -92,6 +164,19 @@ export class DssComponent implements OnInit, OnDestroy {
     ].filter((label):label is string=>!!label);
   }
   reload() {this.refresh.next(this.refresh.value+1);}
+  previewReport() {
+    if (!this.data || this.loading || this.error) return;
+    this.reportData=this.data;
+    this.reportFilterLabels=[...this.activeFilterLabels];
+    this.cdr.detectChanges();
+    document.getElementById('situation-report-title')?.focus();
+  }
+  closeReport() {
+    this.reportData=null;
+    this.cdr.detectChanges();
+    document.querySelector<HTMLButtonElement>('.heading-actions button')?.focus();
+  }
+  printReport() {window.print();}
   selectTab(tab: typeof this.activeTab) {this.activeTab=tab;}
   level(value:string|null) {return (value??'unknown').toLowerCase().replace(/ /g,'-');}
   pageCount(kind:string) {

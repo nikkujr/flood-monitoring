@@ -12,6 +12,11 @@ import { z } from "zod";
 import { config } from "./config.js";
 import { db, healthcheck } from "./db.js";
 import { loadDss } from "./dss-api.js";
+import { criticalZoneStatus, zoneStatusInput } from './dss-zone-status.js';
+import { vulnerabilities } from "./dss.js";
+import { reportReviewInput, reportTransitions } from "./report-review.js";
+import { parseResidentCsv, residentImportSchema } from "./resident-import.js";
+import {residentReadiness,residentQualityConditions,reportMissingZone} from './record-readiness.js';
 import {
   createAccessToken,
   createRefreshToken,
@@ -458,6 +463,8 @@ app.get("/api/flood-reports", requireAuth, requireRoles("Super Admin", "Disaster
   filterFields: {
     zone: { sql: "EXISTS(SELECT 1 FROM flood_report_zones frz WHERE frz.report_id=flood_reports.report_id AND frz.zone_id=?)", exact: true },
     severity: { column: "severity_level", exact: true }, status: { column: "status", exact: true },
+    pending: { sql: "status IN ('Submitted','Under Review') AND ?='true'", exact: true },
+    missingZone: {sql: `${reportMissingZone} AND ?='true'`,exact:true},
     incidentType: { column: "incident_type", exact: true }, dateFrom: { column: "created_at", operator: ">=" },
     dateTo: { sql: "created_at<DATE_ADD(?, INTERVAL 1 DAY)", exact: true }
   }
@@ -476,7 +483,8 @@ app.get("/api/flood-reports/:id", requireAuth, requireRoles("Super Admin", "Disa
     "SELECT zone_id FROM flood_report_zones WHERE report_id=? ORDER BY zone_id",
     [String(req.params.id)]
   );
-  res.json({ ...rows[0], affected_zone_ids: zones.map((zone) => zone.zone_id) });
+  const [reviews] = await db.query<any[]>("SELECT review_id,from_status,to_status,severity_level,notes,affected_zones,reviewer_name,created_at FROM flood_report_reviews WHERE report_id=? ORDER BY created_at,review_id", [String(req.params.id)]);
+  res.json({ ...rows[0], affected_zone_ids: zones.map((zone) => zone.zone_id), allowed_statuses:reportTransitions[rows[0].status] ?? [], reviews:reviews.map(review=>({...review,affected_zones:typeof review.affected_zones==='string'?JSON.parse(review.affected_zones):review.affected_zones})) });
 }));
 
 async function serveReportPhoto(reportId: string, indexValue: string, publicOnly: boolean, res: express.Response) {
@@ -575,23 +583,25 @@ app.get("/api/flood-reports/:id/photos/:index", requireAuth, requireRoles("Super
   serveReportPhoto(String(req.params.id), String(req.params.index), false, res)
 ));
 app.put("/api/flood-reports/:id/status", requireAuth, requireRoles("Super Admin", "Disaster Officer"), asyncRoute(async (req: AuthRequest, res) => {
-  const input = z.object({
-    status: z.enum(["Under Review", "Validated", "Rejected", "Resolved"]),
-    severityLevel: z.enum(["Information", "Minor Incident", "Major Incident"]),
-    validationNotes: z.string().trim().max(2000).optional().default(""),
-    zoneIds: z.array(z.string().uuid()).min(1, "Select at least one affected Barangay Zone")
-  }).parse(req.body);
+  const input = reportReviewInput.parse(req.body);
   const uniqueZoneIds = [...new Set(input.zoneIds)];
-  const [zones] = await db.query<any[]>("SELECT zone_id FROM zones WHERE zone_id IN (?)", [uniqueZoneIds]);
+  const [zones] = uniqueZoneIds.length ? await db.query<any[]>("SELECT zone_id,zone_name FROM zones WHERE zone_id IN (?)", [uniqueZoneIds]) : [[]];
   if (zones.length !== uniqueZoneIds.length) return res.status(400).json({ message: "One or more selected Barangay Zones do not exist" });
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
+    const [reports] = await connection.query<any[]>("SELECT status FROM flood_reports WHERE report_id=? FOR UPDATE", [String(req.params.id)]);
+    if (!reports[0] || reports[0].status !== input.expectedStatus) {
+      await connection.rollback();
+      return res.status(reports[0] ? 409 : 404).json({message:reports[0] ? "This report changed since you opened it. Close and reopen the review to load its current status." : "Flood report not found"});
+    }
     const [previousZones] = await connection.query<any[]>("SELECT zone_id FROM flood_report_zones WHERE report_id=?", [String(req.params.id)]);
     await connection.execute(
-      "UPDATE flood_reports SET status=?,severity_level=?,validation_notes=?,validated_by_user_id=?,validated_at=IF(?='Validated',NOW(),validated_at) WHERE report_id=?",
-      [input.status, input.severityLevel, input.validationNotes, req.user!.userId, input.status, String(req.params.id)]
+      "UPDATE flood_reports SET status=?,severity_level=?,validation_notes=?,validated_by_user_id=IF(?='Validated' AND ?!='Validated',?,validated_by_user_id),validated_at=IF(?='Validated' AND ?!='Validated',NOW(),validated_at) WHERE report_id=?",
+      [input.status, input.severityLevel, input.validationNotes, input.status, input.expectedStatus, req.user!.userId, input.status, input.expectedStatus, String(req.params.id)]
     );
+    const [reviewInsert] = await connection.execute<any>("INSERT INTO flood_report_reviews(report_id,from_status,to_status,severity_level,notes,affected_zones,reviewer_user_id,reviewer_name) SELECT ?,?,?,?,?,?,?,full_name FROM users WHERE user_id=?", [String(req.params.id),input.expectedStatus,input.status,input.severityLevel,input.validationNotes,JSON.stringify(zones.map(zone=>zone.zone_name)),req.user!.userId,req.user!.userId]);
+    if (reviewInsert.affectedRows !== 1) throw new Error("The reviewer account is no longer available. Reopen this report before trying again.");
     await connection.execute("DELETE FROM flood_report_zones WHERE report_id=?", [String(req.params.id)]);
     for (const zoneId of uniqueZoneIds) await connection.execute("INSERT INTO flood_report_zones(report_id,zone_id) VALUES(?,?)", [String(req.params.id), zoneId]);
     await syncAutomaticRiskZones(connection, [...previousZones.map((zone) => String(zone.zone_id)), ...uniqueZoneIds]);
@@ -754,7 +764,7 @@ const resources: Record<string, ResourceConfig> = {
     filterFields: { zone: { column: "h.zone_id", exact: true } }
   },
   residents: {
-    table: "residents r", idColumn: "resident_id", columns: "r.*,TIMESTAMPDIFF(YEAR,r.date_of_birth,CURDATE()) age,(SELECT s.shelter_name FROM shelters s WHERE s.shelter_id=r.evacuation_shelter_id) evacuation_shelter_name,(SELECT h.household_number FROM households h WHERE h.household_id=r.household_id) household_number,(SELECT h.zone_id FROM households h WHERE h.household_id=r.household_id) zone_id,(SELECT z.zone_name FROM households h JOIN zones z ON z.zone_id=h.zone_id WHERE h.household_id=r.household_id) zone_name",
+    table: "residents r", idColumn: "resident_id", columns: "r.*,CAST(r.date_of_birth AS CHAR) date_of_birth,TIMESTAMPDIFF(YEAR,r.date_of_birth,CURDATE()) age,(SELECT s.shelter_name FROM shelters s WHERE s.shelter_id=r.evacuation_shelter_id) evacuation_shelter_name,(SELECT h.household_number FROM households h WHERE h.household_id=r.household_id) household_number,(SELECT h.zone_id FROM households h WHERE h.household_id=r.household_id) zone_id,(SELECT z.zone_name FROM households h JOIN zones z ON z.zone_id=h.zone_id WHERE h.household_id=r.household_id) zone_name",
     readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin", "Disaster Officer", "Data Encoder"],
     fields: { householdId: "household_id", fullName: "full_name", dateOfBirth: "date_of_birth", sex: "sex", contactNumber: "contact_number", addressLine: "address_line", vulnerabilityType: "vulnerability_type", vulnerabilityOther: "vulnerability_other", relationshipToHead: "relationship_to_head", relationshipOther: "relationship_other", maritalStatus: "marital_status", outOfSchoolYouth: "out_of_school_youth", occupation: "occupation", education: "education", philsysNumber: "philsys_number", philhealthNumber: "philhealth_number", fpUse: "fp_use", unmetNeeds: "unmet_needs", pwdSpecify: "pwd_specify", soloParent: "solo_parent", morbidity: "morbidity", waterSourceLevel: "water_source_level", sanitaryToilet: "sanitary_toilet", canSwim: "can_swim", houseType: "house_type", emergencyContactName: "emergency_contact_name", emergencyContactNumber: "emergency_contact_number", priorityLevel: "priority_level", evacuationStatus: "evacuation_status", recordStatus: "record_status", evacuationShelterId: "evacuation_shelter_id" },
     required: ["householdId", "fullName", "dateOfBirth", "sex", "addressLine", "priorityLevel"],
@@ -796,7 +806,7 @@ function validPhilippineContactNumber(value: unknown) {
   const local = digits.startsWith("+63") ? `0${digits.slice(3)}` : digits;
   return /^09\d{9}$/.test(local) || /^0[2-8]\d{7,9}$/.test(local) || /^[1-9]\d{6,7}$/.test(local);
 }
-async function validateResource(path: string, body: Record<string, any>, recordId?: string) {
+async function validateResource(path: string, body: Record<string, any>, recordId?: string, executor: Pick<typeof db, "query"> = db) {
   for (const [key, value] of Object.entries(body)) {
     if (key.toLowerCase().includes("email") && value && !z.string().email().safeParse(value).success) throw new z.ZodError([{ code: "custom", path: [key], message: "Invalid email format" }]);
   }
@@ -813,7 +823,7 @@ async function validateResource(path: string, body: Record<string, any>, recordI
     const value = body[reference.field];
     if ((value === undefined || value === null || value === "") && reference.optional) continue;
     if (value === undefined) continue;
-    const [matches] = await db.query<any[]>(
+    const [matches] = await executor.query<any[]>(
       `SELECT ${reference.column} FROM ${reference.table} WHERE ${reference.column}=? LIMIT 1`,
       [value]
     );
@@ -828,7 +838,7 @@ async function validateResource(path: string, body: Record<string, any>, recordI
     }
     if (body.dateOfBirth && new Date(body.dateOfBirth) > new Date()) throw new z.ZodError([{ code: "custom", path: ["dateOfBirth"], message: "Date of birth cannot be in the future" }]);
     if (body.householdId) {
-      const [households] = await db.query<any[]>("SELECT household_id FROM households WHERE household_id=? LIMIT 1", [body.householdId]);
+      const [households] = await executor.query<any[]>("SELECT household_id FROM households WHERE household_id=? LIMIT 1", [body.householdId]);
       if (!households[0]) {
         throw new z.ZodError([{ code: "custom", path: ["householdId"], message: "Select an existing household" }]);
       }
@@ -840,7 +850,7 @@ async function validateResource(path: string, body: Record<string, any>, recordI
       throw new z.ZodError([{ code: "custom", path: ["evacuationShelterId"], message: "Select the evacuation center where the resident is staying" }]);
     }
     if (body.evacuationShelterId) {
-      const [shelters] = await db.query<any[]>(`SELECT s.shelter_id,s.capacity,
+      const [shelters] = await executor.query<any[]>(`SELECT s.shelter_id,s.capacity,
         (SELECT COUNT(*) FROM residents r WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active' AND (? IS NULL OR r.resident_id!=?)) resident_occupancy
         FROM shelters s WHERE s.shelter_id=? AND s.record_status='Active' LIMIT 1`, [recordId ?? null, recordId ?? null, body.evacuationShelterId]);
       if (!shelters[0]) throw new z.ZodError([{ code: "custom", path: ["evacuationShelterId"], message: "Select an active evacuation center" }]);
@@ -849,7 +859,7 @@ async function validateResource(path: string, body: Record<string, any>, recordI
       }
     }
     if (body.fullName && body.dateOfBirth && body.householdId) {
-      const [duplicates] = await db.query<any[]>(
+      const [duplicates] = await executor.query<any[]>(
         "SELECT resident_id FROM residents WHERE full_name=? AND date_of_birth=? AND household_id=? AND (? IS NULL OR resident_id!=?) LIMIT 1",
         [body.fullName, body.dateOfBirth, body.householdId, recordId ?? null, recordId ?? null]
       );
@@ -1085,6 +1095,9 @@ app.get("/api/residents/yearly", requireAuth, requireRoles("Super Admin", "Disas
       OR r.morbidity IS NOT NULL AND TRIM(r.morbidity) NOT IN ('','NO','N/A')
       OR TIMESTAMPDIFF(YEAR,r.date_of_birth,r.captured_at) NOT BETWEEN 18 AND 59)`;
   }
+  for(const [name,condition] of Object.entries(residentQualityConditions)) {
+    if(String(req.query[`filter_${name}`]??'')==='true') where+=` AND (${condition})`;
+  }
   const sortMap: Record<string, string> = {
     "r.full_name": "r.full_name", "r.date_of_birth": "r.date_of_birth", "r.priority_level": "r.priority_level",
     "r.evacuation_status": "r.evacuation_status", "r.created_at": "r.source_created_at", "r.updated_at": "r.source_updated_at"
@@ -1096,7 +1109,7 @@ app.get("/api/residents/yearly", requireAuth, requireRoles("Super Admin", "Disas
   if (!['asc', 'desc'].includes(sortOrder)) return res.status(400).json({ message: "sortOrder must be asc or desc" });
 
   const [items] = await db.query<any[]>(
-    `SELECT r.*,TIMESTAMPDIFF(YEAR,r.date_of_birth,r.captured_at) age,
+    `SELECT r.*,CAST(r.date_of_birth AS CHAR) date_of_birth,TIMESTAMPDIFF(YEAR,r.date_of_birth,r.captured_at) age,
       (SELECT s.shelter_name FROM shelters s WHERE s.shelter_id=r.evacuation_shelter_id) evacuation_shelter_name
       FROM resident_year_snapshots r WHERE ${where} ORDER BY ${sortColumn} ${sortOrder.toUpperCase()} LIMIT ? OFFSET ?`,
     [...params, pageSize, offset]
@@ -1124,6 +1137,67 @@ app.get("/api/residents/yearly", requireAuth, requireRoles("Super Admin", "Disas
   res.json({ items, page, pageSize, totalItems, totalPages: Math.ceil(totalItems / pageSize), year: requestedYear, currentYear, availableYears, summary });
 }));
 
+app.post('/api/residents/import', requireAuth, requireRoles('Super Admin', 'Data Encoder'), asyncRoute(async (req, res) => {
+  const input = z.object({ csv: z.string().min(1).max(500_000), preview: z.boolean() }).parse(req.body);
+  let rows: Record<string, string>[];
+  try { rows = parseResidentCsv(input.csv); }
+  catch (error) { return res.status(400).json({ message: (error as Error).message }); }
+  const connection = await db.getConnection();
+  let rowNumber = 2;
+  try {
+    await connection.beginTransaction();
+    const seen = new Set<string>();
+    const resource = resources.residents!;
+    for (const row of rows) {
+      const parsed = residentImportSchema.parse(row);
+      const [households] = await connection.query<any[]>('SELECT household_id FROM households WHERE household_number=? FOR UPDATE', [parsed.household_number]);
+      if (households.length !== 1) throw new Error('Select an existing, unique household number.');
+      const body: Record<string, any> = { householdId: households[0].household_id };
+      for (const [field, column] of Object.entries(resource.fields)) if (parsed[column as keyof typeof parsed] !== undefined) body[field] = parsed[column as keyof typeof parsed];
+      const key = JSON.stringify([body.householdId, body.fullName.toLowerCase(), body.dateOfBirth]);
+      if (seen.has(key)) throw new Error('Duplicate resident in this CSV.');
+      seen.add(key);
+      await validateResource('residents', body, undefined, connection);
+      if (!input.preview) {
+        const entries = Object.entries(resource.fields).filter(([field]) => body[field] !== undefined);
+        await connection.execute(`INSERT INTO residents (resident_id,${entries.map(([, column]) => column).join(',')}) VALUES (${['?', ...entries.map(() => '?')].join(',')})`, [randomUUID(), ...entries.map(([field]) => body[field])]);
+      }
+      rowNumber++;
+    }
+    if (input.preview) await connection.rollback(); else await connection.commit();
+    res.json({ count: rows.length, message: input.preview ? `${rows.length} residents ready to import.` : `${rows.length} residents imported successfully.` });
+  } catch (error: any) {
+    await connection.rollback();
+    if (error instanceof z.ZodError || error.code === 'ER_DUP_ENTRY' || !error.code) {
+      return res.status(400).json({ message: `Row ${rowNumber}: ${error instanceof z.ZodError ? error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ') : error.message}. No residents were imported.` });
+    }
+    throw error;
+  } finally { connection.release(); }
+}));
+
+app.get('/api/households/:id/details', requireAuth, requireRoles('Super Admin','Data Encoder'), asyncRoute(async (req,res)=>{
+  const [households] = await db.query<any[]>('SELECT h.household_id,h.household_number,h.head_of_household_name,h.address_line,h.contact_number,h.verification_status,h.updated_at,z.zone_name FROM households h JOIN zones z ON z.zone_id=h.zone_id WHERE h.household_id=? LIMIT 1',[String(req.params.id)]);
+  if (!households[0]) return res.status(404).json({message:'Household not found'});
+  const [residents] = await db.query<any[]>('SELECT r.*,CAST(r.date_of_birth AS CHAR) date_of_birth,s.shelter_name FROM residents r LEFT JOIN shelters s ON s.shelter_id=r.evacuation_shelter_id WHERE r.household_id=? ORDER BY r.full_name',[String(req.params.id)]);
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  res.json({household:households[0],members:residents.map(r=>{const risks=vulnerabilities(r,today);return {id:r.resident_id,name:r.full_name,relationship:r.relationship_to_head,status:r.evacuation_status,recordStatus:r.record_status,priority:r.priority_level,vulnerabilities:risks,...residentReadiness(r,risks),assistance:[r.can_swim==='No'?'Cannot swim':null,r.house_type==='Light materials'?'Home built from light materials':null].filter(Boolean),shelter:r.shelter_name,updatedAt:r.updated_at};})});
+}));
+
+app.get('/api/residents/:id/details',requireAuth,requireRoles('Super Admin','Data Encoder','Disaster Officer'),asyncRoute(async(req,res)=>{
+  const [rows]=await db.query<any[]>('SELECT r.*,CAST(r.date_of_birth AS CHAR) date_of_birth,h.household_number,z.zone_name,s.shelter_name FROM residents r LEFT JOIN households h ON h.household_id=r.household_id LEFT JOIN zones z ON z.zone_id=h.zone_id LEFT JOIN shelters s ON s.shelter_id=r.evacuation_shelter_id WHERE r.resident_id=? LIMIT 1',[String(req.params.id)]);
+  if(!rows[0])return res.status(404).json({message:'Resident not found'});
+  const r=rows[0],today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),risks=vulnerabilities(r,today);
+  const [history]=await db.query<any[]>('SELECT a.assignment_id,a.action,a.evacuation_at,a.created_at,s.shelter_name,u.full_name recorded_by FROM evacuation_assignments a LEFT JOIN shelters s ON s.shelter_id=a.shelter_id LEFT JOIN users u ON u.user_id=a.recorded_by_user_id WHERE a.resident_id=? ORDER BY a.created_at DESC,a.assignment_id',[String(req.params.id)]);
+  res.json({resident:r,vulnerabilities:risks,...residentReadiness(r,risks),history});
+}));
+
+app.get('/api/records/quality',requireAuth,requireRoles('Super Admin','Data Encoder','Disaster Officer'),asyncRoute(async(_req,res)=>{
+  const [rows]=await db.query<any[]>(`SELECT ${Object.entries(residentQualityConditions).map(([key,condition])=>`COALESCE(SUM(${condition}),0) ${key}`).join(',')} FROM residents r`);
+  const [reports]=await db.query<any[]>(`SELECT COALESCE(SUM(status IN ('Submitted','Under Review')),0) pending,COALESCE(SUM(${reportMissingZone}),0) missingZone FROM flood_reports`);
+  res.json({...rows[0],...reports[0]});
+}));
+
+for(const [name,condition] of Object.entries(residentQualityConditions)) resources.residents!.filterFields![name]={sql:`(${condition}) AND ?='true'`,exact:true};
 for (const [path, resource] of Object.entries(resources)) {
   app.get(`/api/${path}`, requireAuth, requireRoles(...resource.readRoles), asyncRoute(async (req, res) => paginated(res, resource.table, req, {
     columns: resource.columns,
@@ -1298,7 +1372,10 @@ app.get("/api/dashboard/summary", requireAuth, asyncRoute(async (_req, res) => {
     (SELECT COUNT(*) FROM residents WHERE record_status='Active' AND UPPER(TRIM(priority_level))='LOW') lowPriorityResidents,
     (SELECT COUNT(*) FROM zones) totalZones,
     (SELECT COUNT(*) FROM flood_reports WHERE status IN ('Submitted','Under Review','Validated')) activeReports,
-    (SELECT COUNT(*) FROM flood_reports WHERE status IN ('Submitted','Under Review')) pendingReports`);
+    (SELECT COUNT(*) FROM flood_reports WHERE status IN ('Submitted','Under Review')) pendingReports,
+    (SELECT COUNT(*) FROM residents WHERE record_status='Active' AND evacuation_status='For Evacuation') forEvacuationResidents,
+    (SELECT COUNT(*) FROM shelters s WHERE s.record_status='Active' AND s.status!='Unavailable' AND s.capacity>0
+      AND (SELECT COUNT(*) FROM residents r WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active') >= s.capacity*0.8) nearCapacityShelters`);
   res.json(rows[0]);
 }));
 
@@ -1443,6 +1520,24 @@ app.put("/api/notifications/:id/read-status", requireAuth, asyncRoute(async (req
 app.get("/api/statistics/dss", requireAuth, asyncRoute(async (req, res) => {
   res.json(await loadDss(req.query));
 }));
+
+for (const method of ['get', 'post'] as const) {
+  app[method]('/api/statistics/dss/zones/:id/resident-status', requireAuth, requireRoles('Super Admin', 'Disaster Officer', 'Data Encoder'), asyncRoute(async (req, res) => {
+    const zoneId = z.string().uuid().parse(req.params.id);
+    const input = method === 'post' ? zoneStatusInput.parse(req.body) : undefined;
+    const connection = await db.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await criticalZoneStatus(connection, zoneId, input);
+      await connection.commit();
+      res.json(result);
+    } catch (error: any) {
+      await connection.rollback();
+      if (error.status) return res.status(error.status).json({ message: error.message });
+      throw error;
+    } finally { connection.release(); }
+  }));
+}
 
 let weatherCache: { expiresAt: number; value: unknown } | undefined;
 app.get("/api/weather/current", asyncRoute(async (_req, res) => {

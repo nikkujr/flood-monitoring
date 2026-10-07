@@ -1,7 +1,8 @@
-import { AfterViewInit, ChangeDetectorRef, Component, ElementRef, Input, OnChanges, OnDestroy, ViewChild } from '@angular/core';
+import { AfterViewInit, ChangeDetectorRef, Component, ElementRef, EventEmitter, Input, OnChanges, OnDestroy, Output, ViewChild } from '@angular/core';
 import * as L from 'leaflet';
 import { environment } from '../environments/environment';
 import { ApiService } from './api.service';
+import {assessedZoneFill,riskColors} from './map-zone-style';
 
 @Component({
   selector: 'app-location-picker',
@@ -9,8 +10,8 @@ import { ApiService } from './api.service';
   template: `
     <div class="picker-help">Tap the map to {{ hasLocation ? 'move' : 'place' }} the {{ locationLabel }} pin{{ restrictToColacling ? ' inside a configured barangay zone' : '' }}.</div>
     <div class="picker-wrap">
-      <div class="picker-style" role="group" aria-label="Map style"><button type="button" [class.active]="mapStyle === 'roadmap'" (click)="setMapStyle('roadmap')">Road map</button><button type="button" [class.active]="mapStyle === 'satellite'" (click)="setMapStyle('satellite')">Satellite</button></div>
-      <div class="picker-map" [id]="mapId" aria-label="Evacuation shelter location picker"></div>
+      <div class="picker-style" role="group" aria-label="Map style"><button type="button" [class.active]="mapStyle === 'roadmap'" (click)="setMapStyle('roadmap')">Roadmap</button><button type="button" [class.active]="mapStyle === 'satellite'" (click)="setMapStyle('satellite')">Satellite</button></div>
+      <div class="picker-map" [id]="mapId" [attr.aria-label]="locationLabel + ' location picker'"></div>
     </div>
     <input #latitudePayload type="hidden" name="latitude" [value]="latitude" />
     <input #longitudePayload type="hidden" name="longitude" [value]="longitude" />
@@ -26,11 +27,11 @@ import { ApiService } from './api.service';
     @if (locationError) { <div class="picker-error" role="alert">{{ locationError }}</div> }
   `,
   styles: [`
-    :host{display:block}.picker-help{font-size:9px;font-weight:500;color:#758398;margin-bottom:7px}.picker-error{margin-top:7px;color:#c33b3b;font-size:9px;font-weight:600}
-    .picker-wrap{position:relative}.picker-map{height:330px;border:1px solid #dce3ec;border-radius:10px;overflow:hidden}
-    .picker-style{position:absolute;z-index:1000;top:10px;right:10px;display:flex;padding:3px;border:1px solid #d8e0ea;border-radius:8px;background:#fff;box-shadow:0 2px 8px #15304a2e}.picker-style button{border:0;border-radius:6px;background:transparent;color:#40506a;padding:7px 10px;cursor:pointer}.picker-style button.active{background:#0758c7;color:#fff}
-    .picker-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px}.picker-actions span{margin-right:auto;color:#758398;font-size:9px}
-    .picker-actions button{border:1px solid #dce3ec;background:#fff;color:#40506a;border-radius:7px;padding:6px 9px;font-size:9px}
+    :host{display:block}.picker-help{font-size:9px;font-weight:500;color:var(--muted);margin-bottom:7px}.picker-error{margin-top:7px;color:#c33b3b;font-size:9px;font-weight:600}
+    .picker-wrap{position:relative}.picker-map{height:330px;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+    .picker-style{position:absolute;z-index:1000;top:10px;right:10px;display:flex;padding:3px;border:1px solid var(--border);border-radius:8px;background:var(--surface);box-shadow:0 2px 8px #15304a2e}.picker-style button{border:0;border-radius:6px;background:transparent;color:var(--muted);padding:7px 10px;cursor:pointer}.picker-style button.active{background:#0758c7;color:#fff}
+    .picker-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px}.picker-actions span{margin-right:auto;color:var(--muted);font-size:9px}
+    .picker-actions button{border:1px solid var(--border);background:var(--surface);color:var(--muted);border-radius:7px;padding:6px 9px;font-size:9px}
     .picker-actions .locate-button{border-color:#a9c8ed;color:#0758c7}
     .picker-error button{border:0;background:transparent;color:#0758c7;font-weight:700;cursor:pointer}.detected-zone{display:flex;align-items:center;gap:8px;margin-top:8px;padding:9px 11px;border:1px solid #b9ddc9;border-radius:8px;background:#effaf4;color:#236b45}.detected-zone i{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#2d9661;color:#fff;font-size:10px;font-style:normal;font-weight:800}.detected-zone small,.detected-zone b{display:block}.detected-zone small{font-size:7px;text-transform:uppercase;letter-spacing:.6px}.detected-zone b{margin-top:1px;font-size:10px}
     @media(max-width:760px){.picker-map{height:clamp(270px,44dvh,360px)}.picker-actions{align-items:stretch}.picker-actions span{flex:1 1 100%;margin:0;overflow-wrap:anywhere}.picker-actions button{flex:1 1 130px;min-height:40px}}
@@ -40,6 +41,7 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
   @Input() initialLatitude: unknown = '';
   @Input() initialLongitude: unknown = '';
   @Input() locationLabel = 'shelter';
+  @Output() changed = new EventEmitter<void>();
   @Input() includeLocationText = false;
   @Input() restrictToColacling = false;
   @Input() showOperationalMap = false;
@@ -124,6 +126,7 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
     this.syncPayloads();
     this.renderMarker();
     this.locationError = '';
+    this.changed.emit();
   }
 
   useCurrentLocation() {
@@ -149,6 +152,7 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
         this.detectZone(location);
         this.syncPayloads();
         this.renderMarker();
+        this.changed.emit();
         this.changeDetector.detectChanges();
       },
       (error) => {
@@ -208,13 +212,12 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
   }
 
   private drawOperationalZones(zones: Array<Record<string, any>>, riskZone: boolean) {
-    const colors: Record<string, string> = { Low: '#43a267', Medium: '#e6a625', High: '#d95050' };
     for (const zone of zones) {
       try {
         const value = zone['polygon_geojson'] ?? zone['polygonGeoJson'];
         const geo = typeof value === 'string' ? JSON.parse(value) : value;
-        const color = riskZone ? colors[zone['risk_level']] ?? '#3176bd' : zone['zone_color'] ?? '#1764c1';
-          L.geoJSON(geo, { style: { color, fillColor: color, fillOpacity: riskZone ? .2 : .08, weight: 2, dashArray: riskZone ? undefined : '8 5' } })
+        const color = riskZone ? riskColors[zone['risk_level']] ?? '#3176bd' : zone['zone_color'] ?? '#1764c1';
+          L.geoJSON(geo, { style: { color, ...(riskZone ? {fillColor:color,fillOpacity:.2} : assessedZoneFill(zone)), weight: 2, dashArray: riskZone ? undefined : '8 5' } })
           .bindTooltip(String(zone['zone_name'] ?? zone['risk_zone_name'] ?? 'Map zone')).addTo(this.operationalOverlay);
       } catch {
         continue;
@@ -265,6 +268,7 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
     this.detectedZoneName = '';
     this.syncPayloads();
     this.renderMarker();
+    this.changed.emit();
   }
 
   private coordinate(value: unknown) {

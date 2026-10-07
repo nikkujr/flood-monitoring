@@ -18,7 +18,7 @@ export async function loadDss(query: unknown) {
     await connection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
     const [zones] = await connection.query<any[]>('SELECT zone_id,zone_name FROM zones ORDER BY zone_name');
     const [households] = await connection.query<any[]>('SELECT household_id,household_number,zone_id,address_line,head_of_household_name FROM households');
-    const [residents] = await connection.query<any[]>(`SELECT resident_id,household_id,full_name,CAST(date_of_birth AS CHAR) date_of_birth,address_line,vulnerability_type,vulnerability_other,pwd_specify,morbidity,can_swim,house_type,priority_level,evacuation_status FROM residents`);
+    const [residents] = await connection.query<any[]>(`SELECT resident_id,household_id,full_name,CAST(date_of_birth AS CHAR) date_of_birth,address_line,vulnerability_type,vulnerability_other,pwd_specify,morbidity,can_swim,house_type,priority_level,evacuation_status FROM residents WHERE record_status='Active'`);
     const [reports] = await connection.query<any[]>(`SELECT report_id,tracking_code,location_text,severity_level,status,DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s') created_at,incident_type FROM flood_reports`);
     const [reportZones] = await connection.query<any[]>('SELECT report_id,zone_id FROM flood_report_zones');
     const [shelters] = await connection.query<any[]>('SELECT shelter_id,shelter_name,zone_id,location_text,capacity,current_occupancy,status FROM shelters');

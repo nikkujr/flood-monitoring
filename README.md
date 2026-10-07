@@ -18,7 +18,7 @@ Requirements: Node.js 26+, npm 11+, and MySQL 8.4 LTS.
 2. Copy `backend/.env.example` to `backend/.env` and set secrets and database credentials.
 3. From `backend`, run `npm install`, `npm run db:init`, `npm run seed`, and `npm run dev`.
 4. From `frontend`, run `npm install` and `npm start`.
-5. Open `http://localhost:4200`. The API listens on `http://localhost:3000`.
+5. Open `http://localhost:4200`. The development API listens on `http://localhost:3001` (set `PORT=3001` in `backend/.env`).
 
 The seed command is idempotent and requires a `SEED_DEFAULT_PASSWORD` of at least 12 characters.
 

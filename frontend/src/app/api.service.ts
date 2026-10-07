@@ -12,6 +12,21 @@ export interface SessionUser {
   role: 'Super Admin' | 'Disaster Officer' | 'Data Encoder';
   mustChangePassword: boolean;
 }
+export interface ZoneStatusPreview {
+  zone: string; risk: string; revision: string; eligibleCount: number; evacuatedCount: number; inactiveCount: number;
+  statusCounts: Record<string, number>;
+  residents: { id: string; name: string; household: string; status: string; recordStatus: string }[];
+}
+export interface ReportReview {
+  review_id:number; from_status:string; to_status:string; severity_level:string; notes:string;
+  affected_zones:string[]; reviewer_name:string; created_at:string;
+}
+export interface FloodReportDetails extends Record<string,unknown> {reviews:ReportReview[];allowed_statuses:string[]}
+export interface HouseholdDetails {
+  household:{household_id:string;household_number:string;head_of_household_name:string;address_line:string;contact_number:string;verification_status:string;updated_at:string;zone_name:string};
+  members:{id:string;name:string;relationship:string;status:string;recordStatus:string;priority:string;vulnerabilities:string[];assistance:string[];shelter:string|null;updatedAt:string;flags:string[];needsAssistance:boolean}[];
+}
+export interface ResidentDetails {resident:Record<string,any>;vulnerabilities:string[];flags:string[];needsAssistance:boolean;history:{assignment_id:string;action:string;evacuation_at:string;created_at:string;shelter_name:string|null;recorded_by:string|null}[]}
 
 export interface WeatherData {
   location: string;
@@ -137,11 +152,19 @@ export class ApiService {
     return this.http.post<{ message: string; assignedCount: number }>(`${this.baseUrl}/shelters/${shelterId}/assignments`, { residentIds, evacuationAt, evacuationStatus });
   }
 
+  previewZoneResidentStatus(zoneId: string) {
+    return this.http.get<ZoneStatusPreview>(`${this.baseUrl}/statistics/dss/zones/${zoneId}/resident-status`);
+  }
+
+  markZoneResidents(zoneId: string, status: string, revision: string, residentIds: string[]) {
+    return this.http.post<{ message: string; updatedCount: number }>(`${this.baseUrl}/statistics/dss/zones/${zoneId}/resident-status`, { status, revision, residentIds });
+  }
+
   returnResidentHome(residentId: string, returnedAt: string) {
     return this.http.post<{ message: string }>(`${this.baseUrl}/residents/${residentId}/return-home`, { returnedAt });
   }
 
-  updateReportStatus(id: string, body: { status: string; severityLevel: string; validationNotes?: string; zoneIds: string[] }) {
+  updateReportStatus(id: string, body: { expectedStatus:string; status: string; severityLevel: string; validationNotes?: string; zoneIds: string[] }) {
     return this.http.put<void>(`${this.baseUrl}/flood-reports/${id}/status`, body);
   }
 
@@ -176,6 +199,8 @@ export class ApiService {
       totalZones: number;
       activeReports: number;
       pendingReports: number;
+      forEvacuationResidents: number;
+      nearCapacityShelters: number;
     }>(`${this.baseUrl}/dashboard/summary`);
   }
 

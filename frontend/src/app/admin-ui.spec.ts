@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import { dashboardCount, editorFieldSections, residentFieldSections, searchResidents, shortRecordId } from './admin-ui.ts';
+
+assert.equal(shortRecordId('b4309248-d200-4361-a205-4eecdcaa35c5'), 'B4309248');
+assert.equal(shortRecordId('BB-2026-A81D20F3'), 'BB-2026-A81D20F3');
+for (const value of [undefined, null, '', 'invalid', NaN, Infinity, -1, 1.5]) assert.equal(dashboardCount(value), '—');
+for (const value of [0, '0']) assert.equal(dashboardCount(value), 0);
+assert.equal(dashboardCount(' 12 '), 12);
+const fields = ['householdId', 'fullName', 'vulnerabilityType', 'emergencyContactNumber', 'priorityLevel', 'futureField'].map(name => ({ name }));
+const sections = residentFieldSections(fields);
+assert.equal(sections[0]?.title, 'Personal information');
+assert.equal(sections.at(-1)?.title, 'Other information');
+assert.deepEqual(sections.flatMap(section => section.fields).map(field => field.name).sort(), fields.map(field => field.name).sort());
+assert.deepEqual(residentFieldSections([]), []);
+const shelterFields = Array.from({ length: 10 }, (_, index) => ({ name: String(index) }));
+assert.deepEqual(editorFieldSections('shelters', shelterFields).map(section => section.fields.length), [4, 4, 2]);
+assert.deepEqual(editorFieldSections('shelters', shelterFields).flatMap(section => section.fields), shelterFields);
+assert.equal(editorFieldSections('residents', fields.slice(0, 4)).length, 1);
+const residents = [{ name: 'Maria Santos', household: 'Z1-12' }, { name: 'Jose Cruz', household: 'Z2-5' }];
+assert.deepEqual(searchResidents(residents, '  MARIA  '), [residents[0]]);
+assert.deepEqual(searchResidents(residents, 'cruz'), [residents[1]]);
+assert.deepEqual(searchResidents(residents, 'z1-12'), [residents[0]]);
+assert.deepEqual(searchResidents(residents, '   '), residents);
+assert.deepEqual(searchResidents(residents, 'missing'), []);
+assert.deepEqual(searchResidents([], 'Maria'), []);
+console.log('Admin grouping and record reference checks passed.');

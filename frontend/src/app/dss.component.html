@@ -1,9 +1,15 @@
+<div class="assessment-workspace" [hidden]="!!reportData">
 <header class="heading">
-  <div><span class="eyebrow">DECISION SUPPORT</span><h1>Flood reports &amp; readiness analytics</h1><p>Evidence-based risk, population exposure, and evacuation planning for Barangay Colacling.</p></div>
-  <button type="button" class="refresh-button" (click)="reload()" [disabled]="loading">↻ Refresh</button>
+  <div><span class="eyebrow">{{mode === 'dss' ? 'DECISION SUPPORT' : 'REPORTING & ANALYTICS'}}</span><h1>{{mode === 'dss' ? 'Decision Support System' : 'Reports & Statistics'}}</h1><p>{{mode === 'dss' ? 'Zone assessment, recommended actions, and evacuation readiness for the barangay disaster-response team.' : 'Incident statistics, report records, and flood susceptibility references for Barangay Colacling.'}}</p></div>
+  <div class="heading-actions">@if (mode === 'dss') {<button type="button" class="refresh-button" (click)="previewReport()" [disabled]="!data || loading || !!error">Situation report</button>}<button type="button" class="refresh-button" (click)="reload()" [disabled]="loading">↻ Refresh</button></div>
 </header>
-<form class="panel filters" aria-label="Decision-support filters" (submit)="applyFilters(); $event.preventDefault()">
-  <div class="filter-title"><span aria-hidden="true">⌕</span><div><b>Assessment filters</b><small>Define the reporting scope, then apply the selection.</small></div>@if (activeFilterCount) {<strong>{{activeFilterCount}} active</strong>}</div>
+<div class="panel assessment-filter-bar">
+  <div class="active-filter-list" aria-live="polite">@if (activeFilterLabels.length) {@for (label of activeFilterLabels; track label) {<span>{{label}}</span>}} @else {<small>Showing the complete assessment</small>}</div>
+  <button type="button" class="refresh-button" (click)="openFilters(filterDialog)" aria-haspopup="dialog">Assessment filters@if (activeFilterCount) { · {{activeFilterCount}} active}</button>
+</div>
+<dialog #filterDialog class="assessment-filter-dialog" aria-labelledby="assessment-filter-title" (click)="$event.target === filterDialog ? filterDialog.close() : null">
+<form class="panel filters" aria-label="Decision-support filters" (ngSubmit)="applyFilters(); filterDialog.close()">
+  <div class="filter-title"><span aria-hidden="true">⌕</span><div><b id="assessment-filter-title">Assessment filters</b><small>Define the reporting scope, then apply the selection.</small></div><button type="button" class="reset-button" aria-label="Close assessment filters" (click)="filterDialog.close()">×</button></div>
   <fieldset class="filter-group"><legend>Location and risk</legend>
     <label>Barangay zone<select name="zone" aria-label="Zone" [(ngModel)]="draftFilters['zone']"><option value="">All zones</option>@for (zone of zoneOptions; track zone.id) {<option [value]="zone.id">{{ zone.name }}</option>}</select></label>
     <label>Assessed risk<select name="risk" aria-label="Risk level" [(ngModel)]="draftFilters['risk']"><option value="">All risk levels</option>@for (risk of risks; track risk) {<option [value]="risk">{{risk}}</option>}</select></label>
@@ -19,14 +25,43 @@
   </fieldset>
   <div class="filter-footer">
     <div class="active-filter-list" aria-live="polite">@if (activeFilterLabels.length) {@for (label of activeFilterLabels; track label) {<span>{{label}}</span>}} @else {<small>Showing the complete assessment</small>}</div>
-    <div class="filter-actions"><button type="button" class="reset-button" (click)="reset()" [disabled]="!activeFilterCount && !draftFilters['zone'] && !draftFilters['risk'] && !draftFilters['from'] && !draftFilters['to'] && !draftFilters['severity'] && !draftFilters['evacuationStatus'] && !draftFilters['vulnerability']">Reset</button><button type="submit" class="apply-filter-button" [disabled]="loading">Apply filters</button></div>
+    <div class="filter-actions"><button type="button" class="reset-button" (click)="reset(); filterDialog.close()" [disabled]="!activeFilterCount && !draftFilters['zone'] && !draftFilters['risk'] && !draftFilters['from'] && !draftFilters['to'] && !draftFilters['severity'] && !draftFilters['evacuationStatus'] && !draftFilters['vulnerability']">Reset</button><button type="button" class="reset-button" (click)="filterDialog.close()">Cancel</button><button type="submit" class="apply-filter-button" [disabled]="loading">Apply filters</button></div>
   </div>
 </form>
+</dialog>
 @if (loading) {<p class="notice" role="status">{{data ? 'Refreshing assessment…' : 'Loading decision-support data…'}}</p>}
 @if (error) {<div class="error" role="alert"><span>{{error}}</span><button type="button" (click)="reload()">Retry</button></div>}
+@if (bulkSuccess) {<p class="notice" role="status">{{bulkSuccess}}</p>}
+<dialog #bulkStatusDialog class="assessment-filter-dialog" aria-labelledby="bulk-status-title" (cancel)="bulkSaving ? $event.preventDefault() : null">
+  <form class="bulk-status-form" (ngSubmit)="saveBulkStatus(bulkStatusDialog)">
+    <h2 id="bulk-status-title">{{bulkViewOnly ? 'Residents in ' : 'Mark residents in '}}{{bulkZoneName}}</h2>
+    <p>{{bulkViewOnly ? 'View all registered residents and their current statuses in this zone. Assessment filters do not limit this list.' : 'Select residents individually or use Mark all to select every active resident who is not already evacuated. Assessment filters do not limit this list.'}}</p>
+    @if (bulkLoading) {<p role="status">Checking current zone risk and resident statuses…</p>}
+    @if (bulkError) {<p class="error" role="alert">{{bulkError}}</p>}
+    @if (bulkPreview; as preview) {
+      <label>Search residents<input class="bulk-resident-search" type="search" name="bulkSearch" [(ngModel)]="bulkSearch" placeholder="Search by name or household" [disabled]="bulkSaving" (keydown.enter)="$event.preventDefault()" /></label>
+      <p role="status">Showing {{bulkVisibleResidents.length}} of {{preview.residents.length}} residents. @if (!bulkViewOnly && bulkSelectedIds.size > bulkVisibleSelectedCount) {{{bulkSelectedIds.size - bulkVisibleSelectedCount}} selected residents are outside this search.}</p>
+      @if (!bulkViewOnly) {
+      <label>Resident status<select name="bulkStatus" [(ngModel)]="bulkStatus" [disabled]="bulkSaving">@for (status of bulkStatuses; track status) {<option [value]="status">{{status}}</option>}</select></label>
+      <p aria-live="polite"><b>{{bulkSelectedIds.size}} selected</b> · <b>{{bulkChangedCount}} residents</b> will be marked <b>{{bulkStatus}}</b>. {{bulkSelectedIds.size - bulkChangedCount}} selected residents already have this status.</p>
+      <label class="bulk-checkbox"><input #markAll type="checkbox" [checked]="bulkAllSelected" [indeterminate]="bulkVisibleSelectedCount > 0 && !bulkAllSelected" [disabled]="bulkSaving || !bulkVisibleEligibleResidents.length" (change)="markAllBulkResidents(markAll.checked)" />{{bulkSearch.trim() ? 'Mark all matching eligible residents' : 'Mark all eligible residents'}}</label>
+      <p>{{preview.evacuatedCount}} evacuated and {{preview.inactiveCount}} inactive residents will be left unchanged.</p>
+      } @else {<p><b>{{preview.residents.length}} residents</b> · {{preview.evacuatedCount}} active residents evacuated · {{preview.inactiveCount}} inactive records</p>}
+      <div class="table-scroll bulk-resident-list" tabindex="0" role="region" aria-label="Zone residents and proposed status changes">
+        <table class="compact-table"><caption>Residents in {{bulkZoneName}}</caption><thead><tr>@if (!bulkViewOnly) {<th scope="col">Mark</th>}<th scope="col">Resident / household</th><th scope="col">Current status</th><th scope="col">{{bulkViewOnly ? 'Record status' : 'Proposed change'}}</th></tr></thead><tbody>
+          @for (resident of bulkVisibleResidents; track resident.id) {
+            <tr>@if (!bulkViewOnly) {<td><input #markResident type="checkbox" [attr.aria-label]="'Select ' + resident.name" [checked]="bulkSelectedIds.has(resident.id)" [disabled]="bulkSaving || resident.recordStatus !== 'Active' || resident.status === 'Evacuated'" (change)="toggleBulkResident(resident.id, markResident.checked)" /></td>}<td><b>{{resident.name}}</b><small>{{resident.household}}</small></td><td>{{resident.status}}</td><td>{{bulkViewOnly ? resident.recordStatus : resident.recordStatus !== 'Active' ? 'Skipped: inactive' : resident.status === 'Evacuated' ? 'Skipped: already evacuated' : !bulkSelectedIds.has(resident.id) ? 'Not selected' : resident.status === bulkStatus ? 'Unchanged: already ' + bulkStatus : 'Mark ' + bulkStatus}}</td></tr>
+          } @empty {<tr><td [attr.colspan]="bulkViewOnly ? 3 : 4" class="empty">{{preview.residents.length ? 'No residents match this search.' : 'No residents are registered in this zone.'}}</td></tr>}
+        </tbody></table>
+      </div>
+      @if (!bulkViewOnly) {<p>To mark residents Evacuated, use Evacuation Support to assign an evacuation center.</p>}
+    }
+    <div class="filter-actions"><button type="button" class="reset-button" (click)="bulkStatusDialog.close()" [disabled]="bulkSaving">{{bulkViewOnly ? 'Close' : 'Cancel'}}</button>@if (!bulkViewOnly) {<button type="submit" class="apply-filter-button" [disabled]="bulkLoading || bulkSaving || !bulkPreview || !bulkChangedCount">{{bulkSaving ? 'Updating…' : 'Confirm status update'}}</button>}</div>
+  </form>
+</dialog>
 @if (data; as d) {
   <div class="analysis-meta"><span>{{d.scope}}</span><time>Updated {{d.generatedAt | date:'medium'}} · Auto-refreshes every 30 seconds</time></div>
-  <nav class="statistics-tabs" aria-label="Reports and statistics sections">
+  <nav class="statistics-tabs" [attr.aria-label]="mode === 'dss' ? 'Decision support sections' : 'Reports and statistics sections'">
     @for (tab of tabs; track tab.id) {
       <button type="button" [class.active]="activeTab === tab.id" [attr.aria-selected]="activeTab === tab.id" (click)="selectTab(tab.id)">{{tab.label}}</button>
     }
@@ -72,6 +107,7 @@
       } @else {<p class="empty">No zone data matches this assessment scope.</p>}
     </article>
   </section>
+  @if (mode === 'statistics') {
   <section class="panel geoanalytics-card statistics-tab-panel" [hidden]="activeTab !== 'zones'" aria-labelledby="geoanalytics-heading">
     <div class="geoanalytics-heading"><div><span class="eyebrow">GEOANALYTICSPH ASSESSMENT SNAPSHOT</span><h2 id="geoanalytics-heading">Total land area prone to flood</h2><p>{{geoAnalyticsLocation.barangay}}, {{geoAnalyticsLocation.municipality}}, {{geoAnalyticsLocation.province}}, {{geoAnalyticsLocation.region}}</p></div><div class="geoanalytics-links"><button type="button" (click)="openHazardMap()">Open hazard map</button><a [href]="geoAnalyticsUrl" target="_blank" rel="noopener noreferrer">Verify source ↗</a></div></div>
     <div class="geoanalytics-results">
@@ -81,8 +117,10 @@
     </div>
     <div class="geoanalytics-summary"><b>{{geoAnalyticsProneArea.toLocaleString()}} sqm</b> out of <b>{{geoAnalyticsTotalArea.toLocaleString()}} sqm</b> is prone to flood ({{geoAnalyticsPronePercent}}%). <small>The saved DENR-MGB 2018 susceptibility polygons are integrated into the Live Map. This baseline hazard assessment is evaluated separately from current risk generated by validated incident reports.</small></div>
   </section>
+  }
+  @if (mode === 'dss') {
   <section class="panel statistics-tab-panel" [hidden]="activeTab !== 'zones'"><div class="section-heading"><div><span class="eyebrow">RISK AND EXPOSURE</span><h2>Zone assessment</h2><p>Potential exposure represents registered people in zones with active validated reports—not confirmed flood victims.</p></div></div><div class="table-scroll"><table><thead><tr><th>Zone</th><th>Risk</th><th class="numeric">Active reports</th><th class="numeric">Potentially exposed</th><th class="numeric">Vulnerable exposed</th><th>Recommended response</th></tr></thead><tbody>
-    @for (zone of d.zones; track zone.id) {<tr><td><b>{{zone.name}}</b><small>{{zone.repeatReports >= 2 ? zone.repeatReports + ' validated/resolved records indicate repeated reporting' : 'No repeated-report pattern'}}</small></td><td><span class="badge" [attr.data-risk]="level(zone.risk)">{{zone.risk}}</span></td><td class="numeric">{{zone.activeReports}}</td><td class="numeric">{{zone.populationKnown ? zone.affectedResidents : 'No data'}}</td><td class="numeric">{{zone.populationKnown ? zone.affectedVulnerable : 'No data'}}</td><td>{{zone.response}}</td></tr>} @empty {<tr><td colspan="6" class="empty">No zone assessment matches the selected filters.</td></tr>}
+    @for (zone of d.zones; track zone.id) {<tr><td><b>{{zone.name}}</b><small>{{zone.repeatReports >= 2 ? zone.repeatReports + ' validated/resolved records indicate repeated reporting' : 'No repeated-report pattern'}}</small></td><td><span class="badge" [attr.data-risk]="level(zone.risk)">{{zone.risk}}</span><details class="risk-evidence"><summary>Why {{zone.risk}}?</summary><p><b>Matched rule:</b> {{zone.rule}}</p><p>{{zone.explanation}}</p><b>Supporting validated reports</b><ul>@for (report of zone.evidence; track report.id) {<li><b>{{report.code}}</b> · {{report.severity}}<small>{{report.createdAt | date:'medium'}}</small></li>} @empty {<li>No active validated reports in this selection.</li>}</ul><small>Pending, rejected, and resolved reports do not raise current risk.</small></details></td><td class="numeric">{{zone.activeReports}}</td><td class="numeric">{{zone.populationKnown ? zone.affectedResidents : 'No data'}}</td><td class="numeric">{{zone.populationKnown ? zone.affectedVulnerable : 'No data'}}</td><td>{{zone.response}}<button type="button" class="refresh-button zone-status-action" (click)="openBulkStatus(zone, bulkStatusDialog, true)" [disabled]="bulkSaving" [attr.aria-label]="'View residents in ' + zone.name">View residents</button>@if (zone.risk === 'Critical' && canMarkResidents) {<button type="button" class="refresh-button zone-status-action" (click)="openBulkStatus(zone, bulkStatusDialog)" [disabled]="bulkSaving" [attr.aria-label]="'Mark residents in ' + zone.name">Mark residents</button>}</td></tr>} @empty {<tr><td colspan="6" class="empty">No zone assessment matches the selected filters.</td></tr>}
   </tbody></table></div></section>
   <section class="two-column statistics-tab-panel" [hidden]="activeTab !== 'evacuation'">
     <article class="panel"><div class="section-heading"><div><span class="eyebrow">PROTECTIVE ACTION</span><h2>Residents needing assistance</h2><p>Evacuated residents and lower-priority cases are excluded.</p></div><b>{{d.evacuation.length}}</b></div><div class="table-scroll"><table class="compact-table"><thead><tr><th>Resident</th><th>Zone</th><th>Priority</th><th>Reason</th><th>Status</th></tr></thead><tbody>
@@ -92,9 +130,24 @@
       @for (shelter of d.shelters; track shelter.id) {<div class="shelter-row"><div><b>{{shelter.name}}</b><small>{{shelter.zone}} · {{shelter.status}}</small></div><span>{{shelter.occupancy ?? 'Unknown'}} / {{shelter.capacity}}</span><div class="capacity-track"><i [style.width.%]="shelter.occupancy === null || !shelter.capacity ? 0 : shelter.occupancy / shelter.capacity * 100"></i></div></div>} @empty {<p class="empty">No evacuation-center data for the selected zones.</p>}
     </article>
   </section>
-  <section class="panel recommendations-panel statistics-tab-panel" [hidden]="activeTab !== 'evacuation'"><div class="section-heading"><div><span class="eyebrow">DSS OUTPUT</span><h2>Recommended actions</h2><p>Rule-based guidance for local-authority review and coordination.</p></div></div><div class="recommendations">@for (item of d.recommendations; track $index) {<article [attr.data-risk]="level(item.risk)"><span>{{item.risk}}</span><div><b>{{item.zone}}</b><p>{{item.text}}</p><small>{{item.reason}}</small></div></article>} @empty {<p class="empty">No recommendations for this assessment scope.</p>}</div></section>
+  <section class="panel recommendations-panel statistics-tab-panel" [hidden]="activeTab !== 'overview'"><div class="section-heading"><div><span class="eyebrow">DSS OUTPUT</span><h2>Recommended actions</h2><p>Rule-based guidance for local-authority review and coordination.</p></div></div><div class="recommendations">@for (item of d.recommendations; track $index) {<article [attr.data-risk]="level(item.risk)"><span>{{item.risk}}</span><div><b>{{item.zone}}</b><p>{{item.text}}</p><small>{{item.reason}}</small></div></article>} @empty {<p class="empty">No recommendations for this assessment scope.</p>}</div></section>
+  <details class="panel rules statistics-tab-panel" [hidden]="activeTab !== 'methodology'" open><summary>Methodology and decision rules</summary><p>The DSS supports—rather than replaces—official field assessment. Expand the rules below for research transparency.</p><ol>@for (rule of d.rules; track rule) {<li>{{rule}}</li>}</ol></details>
+  }
   <section class="panel statistics-tab-panel" [hidden]="activeTab !== 'reports'"><div class="section-heading"><div><span class="eyebrow">REPORT TRACEABILITY</span><h2>Recent incident records</h2><p>Use these records to verify the evidence behind the assessment.</p></div></div><div class="table-scroll"><table><thead><tr><th>Tracking code / location</th><th>Affected zone</th><th>Severity</th><th>Status</th><th>Reported</th></tr></thead><tbody>
     @for (report of d.incidents.recent; track report.id) {<tr><td><b>{{report.code}}</b><small>{{report.location}}</small></td><td>{{report.zones.join(', ') || 'Unassigned'}}</td><td><span class="severity-label" [class]="level(report.severity)">{{report.severity}}</span></td><td>{{report.status}}</td><td>{{report.createdAt | date:'medium'}}</td></tr>} @empty {<tr><td colspan="5" class="empty">No incident records match the selected filters.</td></tr>}
   </tbody></table></div></section>
-  <details class="panel rules statistics-tab-panel" [hidden]="activeTab !== 'methodology'" open><summary>Methodology and decision rules</summary><p>The DSS supports—rather than replaces—official field assessment. Expand the rules below for research transparency.</p><ol>@for (rule of d.rules; track rule) {<li>{{rule}}</li>}</ol></details>
+}
+</div>
+@if (reportData; as report) {
+  <div class="report-toolbar"><button type="button" class="refresh-button" (click)="closeReport()">← Back to analytics</button><span>Fixed snapshot · Changes after this assessment are excluded</span><button type="button" class="apply-filter-button" (click)="printReport()">Print / Save PDF</button></div>
+  <article class="situation-report" aria-labelledby="situation-report-title">
+    <header class="report-heading"><span>BANTAYBAHA · BARANGAY COLACLING, LUPI, CAMARINES SUR</span><h1 id="situation-report-title" tabindex="-1">Flood situation report</h1><p><b>Assessment time:</b> {{report.generatedAt | date:'medium':'+0800'}} · Philippine time</p><p><b>Applied filters:</b> {{reportFilterLabels.length ? reportFilterLabels.join(' · ') : 'All zones, reporting dates, severities, and residents'}}</p></header>
+    <section><h2>Readiness summary</h2><p><b>Highest assessed risk: {{report.overall.risk || 'Insufficient data'}}</b></p><p>{{report.overall.explanation}}</p><div class="report-metrics"><span><b>{{report.metrics.activeReports}}</b>Active validated incidents</span><span><b>{{report.metrics.affectedZones}}</b>Zones with active reports</span><span><b>{{report.metrics.priorityResidents}}</b>Residents needing assistance</span><span><b>{{report.metrics.affectedVulnerable}}</b>Potentially exposed vulnerable residents</span></div></section>
+    <section><h2>Zone risk and supporting rules</h2><div class="report-table-scroll"><table><thead><tr><th>Zone / risk</th><th>Matched rule and evidence</th><th>Potential exposure</th></tr></thead><tbody>@for (zone of report.zones; track zone.id) {<tr><td><b>{{zone.name}}</b>{{zone.risk}}</td><td>{{zone.rule}}<small>{{zone.explanation}}</small></td><td>{{zone.populationKnown ? zone.affectedResidents : 'Unknown'}} residents<small>{{zone.populationKnown ? zone.affectedVulnerable : 'Unknown'}} vulnerable residents</small></td></tr>} @empty {<tr><td colspan="3">No zones match this assessment.</td></tr>}</tbody></table></div></section>
+    <section><h2>Active validated incident records</h2><p>Each report is listed once; a report can contribute to more than one linked zone.</p><div class="report-table-scroll"><table><thead><tr><th>Report / location</th><th>Zone / severity</th><th>Reported</th></tr></thead><tbody>@for (incident of report.incidents.activeRecords; track incident.id) {<tr><td><b>{{incident.code}}</b>{{incident.location}}</td><td>{{incident.zones.join(', ') || 'Unassigned'}}<small>{{incident.severity}}</small></td><td>{{incident.createdAt | date:'medium'}}</td></tr>} @empty {<tr><td colspan="3">No active validated incidents in this selection.</td></tr>}</tbody></table></div></section>
+    <section><h2>Evacuation-center readiness</h2><div class="report-table-scroll"><table><thead><tr><th>Center / zone</th><th>Status</th><th>Capacity</th><th>Occupied</th><th>Available</th></tr></thead><tbody>@for (shelter of report.shelters; track shelter.id) {<tr><td><b>{{shelter.name}}</b>{{shelter.zone}}</td><td>{{shelter.status}}</td><td>{{shelter.capacity}}</td><td>{{shelter.occupancy ?? 'Unknown'}}</td><td>{{shelter.available ?? 'Unknown'}}</td></tr>} @empty {<tr><td colspan="5">No center records for the selected zones.</td></tr>}</tbody></table></div></section>
+    <section><h2>Recommended response actions</h2><ol>@for (item of report.recommendations; track $index) {<li><b>{{item.zone}} · {{item.risk}}</b><p>{{item.text}}</p><small>{{item.reason}}</small></li>} @empty {<li>No actions generated for this selection.</li>}</ol></section>
+    <section class="report-notes"><h2>Scope and data quality</h2><p>{{report.scope}}</p><p><b>Pending verification:</b> {{report.incidents.pending}} reports. <b>Validated reports without a linked zone:</b> {{report.coverage.unassignedActive}}.</p>@if (report.coverage.missingPopulationZones.length) {<p><b>Missing population records:</b> {{report.coverage.missingPopulationZones.join(', ')}}. Exposure for these zones is unknown.</p>}<p>Unknown shelter occupancy means available space cannot be confirmed. Recommended actions require local-authority review.</p></section>
+    <footer>Prepared from the BantayBaha assessment snapshot shown above.</footer>
+  </article>
 }

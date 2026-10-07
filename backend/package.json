@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "db:init": "tsx src/database.ts init && tsx src/seed.ts",
     "db:migrate": "tsx src/migrate.ts",
+    "db:migrate:report-reviews": "tsx src/migrate-report-reviews.ts",
     "db:fresh": "tsx src/database.ts fresh && tsx src/seed.ts",
     "seed": "tsx src/seed.ts",
     "seed:users": "tsx src/seed-users.ts"

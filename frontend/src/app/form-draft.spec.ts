@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {draftKey,draftValues,readDraft,writeDraft,removeDraft} from './form-draft.js';
+const items=new Map<string,string>();
+const storage={getItem:(key:string)=>items.get(key)??null,setItem:(key:string,value:string)=>{items.set(key,value);},removeItem:(key:string)=>{items.delete(key);}};
+const key=draftKey('admin-a','residents');
+const draft={values:draftValues([['fullName','Juan'],['password','secret'],['zoneIds','one'],['zoneIds','two'],['photos',new Blob(['image'])]],['password']),step:2,updatedAt:1000,hasPhotos:true};
+assert.deepEqual(draft.values.zoneIds,['one','two']);assert.equal(draft.values.password,undefined);assert.equal(draft.values.photos,undefined);
+assert.ok(writeDraft(key,draft,storage));assert.equal(readDraft(key,storage,1001)?.values.fullName,'Juan');
+assert.equal(readDraft(draftKey('admin-b','residents'),storage,1001),undefined);
+assert.equal(readDraft(draftKey('admin-a','households'),storage,1001),undefined);
+assert.equal(readDraft(key,storage,1000+8*24*60*60*1000),undefined);
+storage.setItem(key,'{"values":[],"step":0,"updatedAt":1000}');assert.equal(readDraft(key,storage,1001),undefined);
+storage.setItem(key,'not json');assert.equal(readDraft(key,storage,1001),undefined);
+assert.equal(writeDraft(key,draft,{...storage,setItem:()=>{throw Error('Full');}}),false);
+assert.ok(removeDraft(key,storage));assert.equal(readDraft(key,storage,1001),undefined);
+console.log('Browser drafts: text/multiselect retention, account/form isolation, expiry, corrupt/full storage, password/photo exclusion, and clearing passed.');
