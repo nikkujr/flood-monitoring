@@ -1,4 +1,4 @@
-import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from '@angular/core';
+import { ChangeDetectorRef, Component, ElementRef, EventEmitter, Input, OnDestroy, OnInit, Output, ViewChild, inject } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { BehaviorSubject, Subscription, catchError, combineLatest, finalize, map, of, switchMap, timer, type Observable } from 'rxjs';
@@ -6,12 +6,14 @@ import { ApiService, type ZoneStatusPreview } from './api.service';
 import type { DssData } from './dss.models';
 import { searchResidents } from './admin-ui';
 import { buildEvacuationPlan } from './evacuation-plan';
+import {RescueComponent} from './rescue.component';
+import type {ResponseView} from './rescue.models';
 
 const emptyFilters = (): Record<string,string> => ({
   zone:'', risk:'', from:'', to:'', severity:'', evacuationStatus:'', vulnerability:''
 });
 
-@Component({selector:'app-dss',standalone:true,imports:[FormsModule,DatePipe],templateUrl:'./dss.component.html',styleUrl:'./dss.component.scss'})
+@Component({selector:'app-dss',standalone:true,imports:[FormsModule,DatePipe,RescueComponent],templateUrl:'./dss.component.html',styleUrl:'./dss.component.scss'})
 export class DssComponent implements OnInit, OnDestroy {
   @Output() navigate = new EventEmitter<{ page: string; resource?: string; filters?: Record<string, string> }>();
   @Input() initialTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology' = 'reports';
@@ -39,9 +41,9 @@ export class DssComponent implements OnInit, OnDestroy {
   bulkSearch = '';
   readonly bulkStatuses = ['Safe', 'For Monitoring', 'For Evacuation'];
   get canMarkResidents() { return ['Super Admin', 'Disaster Officer', 'Data Encoder'].includes(this.api.user()?.role ?? ''); }
-  get bulkEligibleResidents() { return this.bulkPreview?.residents.filter(r => r.recordStatus === 'Active' && r.status !== 'Evacuated') ?? []; }
+  get bulkEligibleResidents() { return this.bulkPreview?.residents.filter(r => r.recordStatus === 'Active' && r.status !== 'Evacuated' && !['Missing','Deceased'].includes(r.outcome??'')) ?? []; }
   get bulkVisibleResidents() { return searchResidents(this.bulkPreview?.residents ?? [], this.bulkSearch); }
-  get bulkVisibleEligibleResidents() { return this.bulkVisibleResidents.filter(r => r.recordStatus === 'Active' && r.status !== 'Evacuated'); }
+  get bulkVisibleEligibleResidents() { return this.bulkVisibleResidents.filter(r => r.recordStatus === 'Active' && r.status !== 'Evacuated' && !['Missing','Deceased'].includes(r.outcome??'')); }
   get bulkVisibleSelectedCount() { return this.bulkVisibleEligibleResidents.filter(r => this.bulkSelectedIds.has(r.id)).length; }
   get bulkChangedCount() { return this.bulkEligibleResidents.filter(r => this.bulkSelectedIds.has(r.id) && r.status !== this.bulkStatus).length; }
   get bulkAllSelected() { return this.bulkVisibleEligibleResidents.length > 0 && this.bulkVisibleSelectedCount === this.bulkVisibleEligibleResidents.length; }
@@ -57,12 +59,22 @@ export class DssComponent implements OnInit, OnDestroy {
   planError='';
   planSuccess='';
   planSearch='';
+  responseView:ResponseView='residents';
+  @ViewChild('responseHeading') responseHeading?:ElementRef<HTMLHeadingElement>;
+  setResponseView(view:ResponseView){this.responseView=view;this.responseHeading?.nativeElement.scrollIntoView({block:'start'});this.responseHeading?.nativeElement.focus({preventScroll:true});}
+  planPage=1;
+  get planPageCount(){return Math.max(1,Math.ceil(this.visiblePlanRows.length/5));}
+  get pagedPlanRows(){return this.visiblePlanRows.slice((Math.min(this.planPage,this.planPageCount)-1)*5,Math.min(this.planPage,this.planPageCount)*5);}
+  movePlanPage(delta:number){this.planPage=Math.max(1,Math.min(this.planPageCount,this.planPage+delta));}
   allowOtherZones=true;
   scenarioZone='';
   scenarioMajorReports=0;
   scenarioDirty=false;
   scenarioClosedCenters=new Set<string>();
   planSelectedIds=new Set<string>();
+  missionResidentIds=new Set<string>();
+  get waitingForTeam(){return this.plan?.assignments.filter(a=>!this.missionResidentIds.has(a.person.id)).length??0;}
+  updateMissionResidents(ids:Set<string>){this.missionResidentIds=ids;for(const id of ids)this.planSelectedIds.delete(id);}
   arrivalRows:NonNullable<typeof this.plan>['assignments']=[];
   arrivalShelter:DssData['shelters'][number]|null=null;
   arrivalConfirmed=false;
@@ -73,15 +85,16 @@ export class DssComponent implements OnInit, OnDestroy {
   }
   get planCenters() {return (this.planScenario??this.planBaseline)?.shelters??[];}
   get baselinePlan() {return this.planBaseline?buildEvacuationPlan(this.planBaseline,this.allowOtherZones):null;}
-  get planAllSelected() {const rows=this.visiblePlanRows.filter(a=>a.shelter);return rows.length>0&&rows.every(a=>this.planSelectedIds.has(a.person.id));}
+  get planAllSelected() {const rows=this.visiblePlanRows.filter(a=>a.shelter&&!this.missionResidentIds.has(a.person.id));return rows.length>0&&rows.every(a=>this.planSelectedIds.has(a.person.id));}
   togglePlanResident(id:string,selected:boolean) {selected?this.planSelectedIds.add(id):this.planSelectedIds.delete(id);}
-  toggleAllPlanResidents(selected:boolean) {for(const row of this.visiblePlanRows) if(row.shelter)this.togglePlanResident(row.person.id,selected);}
+  toggleAllPlanResidents(selected:boolean) {for(const row of this.visiblePlanRows) if(row.shelter&&!this.missionResidentIds.has(row.person.id))this.togglePlanResident(row.person.id,selected);}
   toggleScenarioCenter(id:string,closed:boolean) {closed?this.scenarioClosedCenters.add(id):this.scenarioClosedCenters.delete(id);}
   scenarioChanged() {this.scenarioDirty=true;this.planSelectedIds.clear();this.planSuccess='';}
   get planPreviewOnly() {return !!this.planScenario||this.scenarioDirty;}
   get changedPlanZones() {return this.planScenario?.zones.filter(z=>{const baseline=this.planBaseline?.zones.find(b=>b.id===z.id);return z.risk!==baseline?.risk||z.activeReports!==baseline?.activeReports;})??[];}
   baselineZoneRisk(id:string) {return this.planBaseline?.zones.find(z=>z.id===id)?.risk??'Unknown';}
-  rebuildPlan() {const data=this.planScenario??this.planBaseline;this.plan=data?buildEvacuationPlan(data,this.allowOtherZones):null;this.planSelectedIds.clear();}
+  rebuildPlan() {const data=this.planScenario??this.planBaseline;this.plan=data?buildEvacuationPlan(data,this.allowOtherZones):null;this.planSelectedIds.clear();this.planPage=1;}
+  returnToLivePlan(){if(this.planLoading||this.arrivalSaving)return;this.setResponseView('residents');this.refreshPlan();}
   refreshPlan(simulate=false) {
     if(this.planLoading||this.arrivalSaving)return;
     this.planLoading=true;this.planError='';this.plan=null;this.planScenario=null;this.planSelectedIds.clear();
@@ -101,6 +114,13 @@ export class DssComponent implements OnInit, OnDestroy {
     dialog.showModal();
   }
   selectedForCenter(id:string) {return this.plan?.assignments.filter(a=>a.shelter?.id===id&&this.planSelectedIds.has(a.person.id)).length??0;}
+  dispatchPlan(center:DssData['shelters'][number],rescue:RescueComponent){
+    if(this.planPreviewOnly||this.planLoading||this.arrivalSaving||!this.canMarkResidents)return;
+    const rows=this.plan?.assignments.filter(a=>a.shelter?.id===center.id&&this.planSelectedIds.has(a.person.id))??[];
+    if(!rows.length||rows.length>100)return;
+    rescue.prepare(rows.map(a=>({id:a.person.id,name:a.person.name,household:a.person.household,address:a.person.address,status:a.person.status})),center);
+    rescue.instructions=[...new Set(rows.flatMap(a=>[...a.person.assistance,...a.person.vulnerabilities]))].join('; ').slice(0,1000);
+  }
   savePlanArrivals(dialog:HTMLDialogElement) {
     if(this.planPreviewOnly||this.arrivalSaving||!this.canMarkResidents||!this.arrivalConfirmed||!this.arrivalShelter||!this.arrivalRows.length||!this.arrivalAt||!Number.isFinite(Date.parse(this.arrivalAt)))return;
     this.arrivalSaving=true;this.planError='';

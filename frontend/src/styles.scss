@@ -41,6 +41,18 @@
 html, body { margin: 0; min-height: 100%; font-family: 'Poppins', Arial, sans-serif; background: var(--canvas); }
 body { min-width: 320px; }
 
+// Common hierarchy and controls across records, DSS and response workspaces.
+.shell .content :is(.page-heading,.heading){align-items:flex-start;gap:16px;margin-bottom:20px}
+.shell .content :is(.page-heading,.heading) h1{font-size:clamp(23px,2.4vw,28px);line-height:1.25;margin:5px 0 8px;letter-spacing:-.4px}
+.shell .content :is(.page-heading,.heading) p{font-size:13px;line-height:1.6;margin:0;max-width:720px;color:var(--muted)}
+.shell :is(.primary,.apply-filter-button){min-height:40px;border-radius:8px;background:#0758c7;color:#fff;box-shadow:none;font-size:13px;font-weight:600}
+.shell :is(.secondary,.refresh-button,.reset-button){min-height:40px;border-radius:8px;background:var(--surface);color:var(--text);border:1px solid var(--border);font-size:13px;font-weight:600}
+.shell :is(button,input,select,textarea,summary):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.shell .content :is(.resource-tabs,.statistics-tabs){background:var(--surface);gap:6px;scrollbar-width:thin}
+.shell .content :is(.resource-tabs,.statistics-tabs) button{min-height:40px;border-radius:8px;font-size:13px}
+.shell .content :is(.resource-tabs,.statistics-tabs) button.active{background:var(--soft);color:var(--accent);border-color:var(--border);box-shadow:inset 0 -2px var(--accent)}
+@media(max-width:600px){.shell .content :is(.page-actions,.heading-actions){width:100%;display:flex;flex-wrap:wrap;gap:8px}.shell :is(.primary,.secondary,.apply-filter-button,.refresh-button,.reset-button){min-height:44px}}
+
 .lookup-trigger{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:40px;padding:9px 11px;border:1px solid var(--border)!important;border-radius:8px;background:var(--surface)!important;text-align:left;color:var(--text)!important}.lookup-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.lookup-trigger b{flex:0 0 auto;color:var(--accent);font-size:12px}.lookup-backdrop{position:fixed;inset:0;z-index:2100;display:grid;place-items:center;padding:24px;background:#071a35b8;backdrop-filter:blur(4px)}.household-lookup-modal{width:min(620px,100%);max-height:min(720px,90vh);display:flex;flex-direction:column;min-height:0;padding:22px;border-radius:15px;background:var(--surface);box-shadow:0 30px 80px #071a3566}.lookup-search{display:grid;gap:6px;color:var(--muted);font-size:12px;font-weight:700}.lookup-search input{width:100%;padding:11px;border:1px solid var(--border);border-radius:8px;outline:0}.lookup-search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px #1764c115}.household-lookup-results{min-height:0;margin-top:14px;overflow:auto;border:1px solid var(--border);border-radius:10px}.household-lookup-results>button{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:0;border-top:1px solid var(--border);background:var(--surface);text-align:left}.household-lookup-results>button:first-child{border-top:0}.household-lookup-results>button:hover,.household-lookup-results>button.selected{background:var(--soft)}.household-lookup-results b,.household-lookup-results small{display:block}.household-lookup-results b{font-size:12px}.household-lookup-results small{margin-top:3px;color:var(--muted);font-size:12px}.household-lookup-results i{color:var(--accent);font-size:12px;font-style:normal;font-weight:700}
 .table-head>button{display:flex;align-items:center;gap:5px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:700;letter-spacing:inherit;text-align:left}.table-head>button:hover{color:var(--accent)}.table-head>button i{font-size:12px;font-style:normal}.session-loader{position:fixed;inset:0;display:grid;place-content:center;justify-items:center;gap:12px;background:var(--canvas);color:var(--muted)}.session-loader span{width:48px;height:48px;display:grid;place-items:center;border-radius:13px;background:#0758c7;color:#fff;font-weight:800;box-shadow:0 10px 30px #0758c733}.session-loader p{margin:0;font-size:12px}
 .public-toast{position:fixed;right:22px;bottom:22px;z-index:2200;display:grid;grid-template-columns:30px minmax(0,1fr) 26px;align-items:center;gap:10px;width:min(440px,calc(100vw - 32px));padding:13px 14px;border:1px solid #a9ddbd;border-radius:12px;background:var(--success-bg);color:var(--success);box-shadow:0 18px 45px #153b2960;animation:toast-in .22s ease-out}.public-toast>span{width:30px;height:30px;display:grid;place-items:center;border-radius:50%;background:#2b9b61;color:#fff;font-weight:800}.public-toast p{margin:0;font-size:12px;font-weight:600;line-height:1.5}.public-toast button{border:0;background:transparent;color:inherit;font-size:19px}@keyframes toast-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@media(max-width:600px){.public-toast{right:16px;bottom:16px}}
@@ -353,3 +365,38 @@ html:root app-root .public-shell .report-form > * {min-width:0;}
 html:root app-root .public-shell .report-form :is(input,select,textarea) {width:100%;min-width:0;max-width:100%;}
 @media(max-width:760px){html:root app-root .public-shell .report-form{grid-template-columns:minmax(0,1fr);}}
 .quality-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.quality-grid button{display:grid;gap:10px;padding:18px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);text-align:left}.quality-grid strong{font-size:28px}.quality-grid span{color:var(--muted);font-size:14px}.quality-grid small{color:var(--accent);font-size:14px}.readiness-summary{margin:16px 0;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--soft);color:var(--text)}.readiness-summary p{margin:8px 0;line-height:1.6}.readiness-flags{color:var(--warning)!important}@media(max-width:600px){.quality-grid{grid-template-columns:1fr}}
+
+// Task navigation and optional workspace details.
+.workspace-location{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 18px;color:var(--muted);font-size:12px}
+.workspace-location button{border:0;background:transparent;color:var(--accent);padding:4px 0;font:inherit}
+.workspace-location b{color:var(--text);font-weight:600}
+main:focus{outline:none}
+.task-finder{width:min(620px,calc(100vw - 24px));max-height:calc(100dvh - 24px);padding:22px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);overflow:auto}
+.task-finder::backdrop{background:#071a3599}
+.task-finder-heading{display:flex;justify-content:space-between;gap:16px;align-items:start;margin-bottom:16px}
+.task-finder h2{font-size:20px;margin:0 0 6px}
+.task-finder p,.task-finder-note{color:var(--muted);font-size:12px;line-height:1.6;margin:0}
+.task-finder label{display:grid;gap:6px;font-size:12px;font-weight:600}
+.task-finder input{width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text)}
+.task-finder-results{display:grid;max-height:48dvh;overflow:auto;margin:12px 0;border:1px solid var(--border);border-radius:8px}
+.task-finder-results button{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:13px;border:0;border-bottom:1px solid var(--border);background:var(--surface);color:var(--text);text-align:left}
+.task-finder-results button:last-child{border-bottom:0}
+.task-finder-results button:hover{background:var(--soft)}
+.task-finder-results b,.task-finder-results small{display:block;font-size:13px}
+.task-finder-results small{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5}
+.task-finder-results>p{padding:16px}
+.workspace-disclosure{margin:0 0 18px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+.workspace-disclosure>summary{padding:14px 16px;color:var(--text);font-size:13px;font-weight:600;cursor:pointer}
+.workspace-disclosure[open]>summary{border-bottom:1px solid var(--border)}
+.workspace-disclosure .resident-year-overview{margin-bottom:0;border:0;box-shadow:none}
+.workspace-disclosure .weather-panel{margin:0;border:0;box-shadow:none}
+.center-map-disclosure{margin:12px 16px}
+.workspace-next{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 17px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)}
+.sidebar nav{overflow:auto;min-height:0;scrollbar-width:thin}
+@media(max-width:600px){.task-finder-trigger{padding:0 9px;font-size:12px}.topbar .header-greeting{display:none}.workspace-location{gap:6px;margin-bottom:12px}.workspace-next{flex-wrap:wrap}.task-finder{padding:16px}}
+
+.shell .content .section-select:not(.planner-section){display:none}@media(max-width:760px){.shell .content .section-select:not(.planner-section){display:block}.shell .content .statistics-tabs{display:none!important}}
+
+.center-records-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:16px;border:0;border-top:1px solid var(--border);background:var(--surface);color:var(--text);font:inherit;font-size:13px;text-align:left;cursor:pointer}
+
+.recorded-outcome-value{display:block;min-height:44px;padding:11px 13px;border:1px solid var(--border);border-radius:8px;background:var(--soft);color:var(--text);font-weight:600}.recorded-outcome-help{font-size:12px;color:var(--muted);line-height:1.6;font-weight:400}

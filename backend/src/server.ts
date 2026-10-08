@@ -13,6 +13,8 @@ import { config } from "./config.js";
 import { db, healthcheck } from "./db.js";
 import { loadDss, loadDssSource } from "./dss-api.js";
 import { simulateDss, simulationInput } from './dss-simulation.js';
+import {rescueRouter} from './rescue.js';
+import {syncShelterOccupancy} from './shelter-occupancy.js';
 import { criticalZoneStatus, zoneStatusInput } from './dss-zone-status.js';
 import { vulnerabilities } from "./dss.js";
 import { reportReviewInput, reportTransitions } from "./report-review.js";
@@ -48,6 +50,7 @@ app.use(helmet({
 }));
 app.use(cors({ origin: config.frontendOrigins, credentials: true }));
 app.use(express.json({ limit: "1mb" }));
+app.use('/api/rescue',rescueRouter);
 
 const asyncRoute = (handler: (req: any, res: any) => Promise<unknown>) =>
   (req: any, res: any, next: any) => Promise.resolve(handler(req, res)).catch(next);
@@ -765,7 +768,7 @@ const resources: Record<string, ResourceConfig> = {
     filterFields: { zone: { column: "h.zone_id", exact: true } }
   },
   residents: {
-    table: "residents r", idColumn: "resident_id", columns: "r.*,CAST(r.date_of_birth AS CHAR) date_of_birth,TIMESTAMPDIFF(YEAR,r.date_of_birth,CURDATE()) age,(SELECT s.shelter_name FROM shelters s WHERE s.shelter_id=r.evacuation_shelter_id) evacuation_shelter_name,(SELECT h.household_number FROM households h WHERE h.household_id=r.household_id) household_number,(SELECT h.zone_id FROM households h WHERE h.household_id=r.household_id) zone_id,(SELECT z.zone_name FROM households h JOIN zones z ON z.zone_id=h.zone_id WHERE h.household_id=r.household_id) zone_name",
+    table: "residents r", idColumn: "resident_id", columns: "r.*,(SELECT outcome FROM resident_outcomes o WHERE o.resident_id=r.resident_id) outcome,CAST(r.date_of_birth AS CHAR) date_of_birth,TIMESTAMPDIFF(YEAR,r.date_of_birth,CURDATE()) age,(SELECT s.shelter_name FROM shelters s WHERE s.shelter_id=r.evacuation_shelter_id) evacuation_shelter_name,(SELECT h.household_number FROM households h WHERE h.household_id=r.household_id) household_number,(SELECT h.zone_id FROM households h WHERE h.household_id=r.household_id) zone_id,(SELECT z.zone_name FROM households h JOIN zones z ON z.zone_id=h.zone_id WHERE h.household_id=r.household_id) zone_name",
     readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin", "Disaster Officer", "Data Encoder"],
     fields: { householdId: "household_id", fullName: "full_name", dateOfBirth: "date_of_birth", sex: "sex", contactNumber: "contact_number", addressLine: "address_line", vulnerabilityType: "vulnerability_type", vulnerabilityOther: "vulnerability_other", relationshipToHead: "relationship_to_head", relationshipOther: "relationship_other", maritalStatus: "marital_status", outOfSchoolYouth: "out_of_school_youth", occupation: "occupation", education: "education", philsysNumber: "philsys_number", philhealthNumber: "philhealth_number", fpUse: "fp_use", unmetNeeds: "unmet_needs", pwdSpecify: "pwd_specify", soloParent: "solo_parent", morbidity: "morbidity", waterSourceLevel: "water_source_level", sanitaryToilet: "sanitary_toilet", canSwim: "can_swim", houseType: "house_type", emergencyContactName: "emergency_contact_name", emergencyContactNumber: "emergency_contact_number", priorityLevel: "priority_level", evacuationStatus: "evacuation_status", recordStatus: "record_status", evacuationShelterId: "evacuation_shelter_id" },
     required: ["householdId", "fullName", "dateOfBirth", "sex", "addressLine", "priorityLevel"],
@@ -780,7 +783,7 @@ const resources: Record<string, ResourceConfig> = {
   },
   volunteers: {
     table: "volunteers", idColumn: "volunteer_id", readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin", "Disaster Officer", "Data Encoder"],
-    fields: { fullName: "full_name", contactNumber: "contact_number", email: "email", assignedZoneId: "assigned_zone_id", availabilityStatus: "availability_status", notes: "notes" },
+    fields: { fullName: "full_name", contactNumber: "contact_number", email: "email", assignedZoneId: "assigned_zone_id", availabilityStatus: "availability_status", responderType: "responder_type", notes: "notes" },
     required: ["fullName", "contactNumber", "availabilityStatus"],
     searchColumns: ["full_name", "contact_number", "email"], sortFields: ["full_name", "availability_status", "created_at", "updated_at"]
   },
@@ -831,6 +834,10 @@ async function validateResource(path: string, body: Record<string, any>, recordI
     if (!matches[0]) throw new z.ZodError([{ code: "custom", path: [reference.field], message: `Select an existing ${reference.label}` }]);
   }
   if (path === "residents") {
+    if(recordId&&(body.evacuationShelterId||['Safe','For Evacuation','Evacuated'].includes(body.evacuationStatus))){
+      const [outcomes]=await executor.query<any[]>("SELECT outcome FROM resident_outcomes WHERE resident_id=? AND outcome IN ('Missing','Deceased')",[recordId]);
+      if(outcomes.length)throw new z.ZodError([{code:'custom',path:['evacuationStatus'],message:'This resident is Missing or Deceased. Review their recorded outcome before assigning shelter space or changing protective status.'}]);
+    }
     for (const [field, allowed] of Object.entries({ canSwim: ["Yes", "No"], houseType: ["Concrete", "Semi concrete", "Light materials"] })) {
       const value = body[field];
       if (value !== undefined && value !== null && value !== "" && !allowed.includes(value)) {
@@ -866,6 +873,9 @@ async function validateResource(path: string, body: Record<string, any>, recordI
       );
       if (duplicates[0]) throw Object.assign(new Error("Duplicate resident record"), { code: "ER_DUP_ENTRY" });
     }
+  }
+  if(path==='volunteers'&&body.responderType!==undefined&&!['Volunteer','Barangay Tanod'].includes(body.responderType)){
+    throw new z.ZodError([{code:'custom',path:['responderType'],message:'Choose Volunteer or Barangay Tanod.'}]);
   }
   if (path === "households") {
     if (body.householdNumber !== undefined) {
@@ -915,22 +925,6 @@ async function validateResource(path: string, body: Record<string, any>, recordI
   }
 }
 
-async function syncShelterOccupancy(connection: any, shelterIds: Array<string | null | undefined>) {
-  for (const shelterId of [...new Set(shelterIds.filter(Boolean) as string[])]) {
-    await connection.execute(
-      `UPDATE shelters s SET current_occupancy=(SELECT COUNT(*) FROM residents r
-       WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active'),
-       status=CASE
-         WHEN s.record_status='Inactive' OR s.status='Unavailable' THEN 'Unavailable'
-         WHEN (SELECT COUNT(*) FROM residents r WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active') >= s.capacity THEN 'Full'
-         WHEN (SELECT COUNT(*) FROM residents r WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active') >= CEIL(s.capacity * 0.8) THEN 'Near Capacity'
-         ELSE 'Available' END
-       WHERE s.shelter_id=?`,
-      [shelterId]
-    );
-  }
-}
-
 function mysqlDateTime(date: Date) {
   return date.toISOString().slice(0, 19).replace("T", " ");
 }
@@ -964,6 +958,10 @@ app.post("/api/shelters/:id/assignments", requireAuth, requireRoles("Super Admin
       await connection.rollback();
       return res.status(409).json({message:'Resident statuses changed since the plan was generated. Refresh the planner before recording arrivals.'});
     }
+    const [activeMissions]=await connection.query<any[]>('SELECT resident_id FROM rescue_active_residents WHERE resident_id IN (?)',[input.residentIds]);
+    if(activeMissions.length){await connection.rollback();return res.status(409).json({message:'A selected resident has an active rescue mission. Confirm arrival from that mission, or cancel it first.'});}
+    const [outcomes]=await connection.query<any[]>("SELECT resident_id FROM resident_outcomes WHERE resident_id IN (?) AND outcome IN ('Missing','Deceased') FOR UPDATE",[input.residentIds]);
+    if(outcomes.length){await connection.rollback();return res.status(409).json({message:'A selected resident is Missing or Deceased. Review the outcome follow-up list before assigning shelter space.'});}
     const duplicate = residents.find((resident) => resident.evacuation_status === "Evacuated" && resident.evacuation_shelter_id === shelterId);
     if (duplicate) {
       await connection.rollback();
@@ -1115,7 +1113,7 @@ app.get("/api/residents/yearly", requireAuth, requireRoles("Super Admin", "Disas
   if (!['asc', 'desc'].includes(sortOrder)) return res.status(400).json({ message: "sortOrder must be asc or desc" });
 
   const [items] = await db.query<any[]>(
-    `SELECT r.*,CAST(r.date_of_birth AS CHAR) date_of_birth,TIMESTAMPDIFF(YEAR,r.date_of_birth,r.captured_at) age,
+    `SELECT r.*,${requestedYear === currentYear ? '(SELECT outcome FROM resident_outcomes o WHERE o.resident_id=r.resident_id)' : 'NULL'} outcome,CAST(r.date_of_birth AS CHAR) date_of_birth,TIMESTAMPDIFF(YEAR,r.date_of_birth,r.captured_at) age,
       (SELECT s.shelter_name FROM shelters s WHERE s.shelter_id=r.evacuation_shelter_id) evacuation_shelter_name
       FROM resident_year_snapshots r WHERE ${where} ORDER BY ${sortColumn} ${sortOrder.toUpperCase()} LIMIT ? OFFSET ?`,
     [...params, pageSize, offset]
@@ -1190,11 +1188,12 @@ app.get('/api/households/:id/details', requireAuth, requireRoles('Super Admin','
 }));
 
 app.get('/api/residents/:id/details',requireAuth,requireRoles('Super Admin','Data Encoder','Disaster Officer'),asyncRoute(async(req,res)=>{
-  const [rows]=await db.query<any[]>('SELECT r.*,CAST(r.date_of_birth AS CHAR) date_of_birth,h.household_number,z.zone_name,s.shelter_name FROM residents r LEFT JOIN households h ON h.household_id=r.household_id LEFT JOIN zones z ON z.zone_id=h.zone_id LEFT JOIN shelters s ON s.shelter_id=r.evacuation_shelter_id WHERE r.resident_id=? LIMIT 1',[String(req.params.id)]);
+  const [rows]=await db.query<any[]>('SELECT r.*,(SELECT outcome FROM resident_outcomes o WHERE o.resident_id=r.resident_id) outcome,CAST(r.date_of_birth AS CHAR) date_of_birth,h.household_number,z.zone_name,s.shelter_name FROM residents r LEFT JOIN households h ON h.household_id=r.household_id LEFT JOIN zones z ON z.zone_id=h.zone_id LEFT JOIN shelters s ON s.shelter_id=r.evacuation_shelter_id WHERE r.resident_id=? LIMIT 1',[String(req.params.id)]);
   if(!rows[0])return res.status(404).json({message:'Resident not found'});
   const r=rows[0],today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),risks=vulnerabilities(r,today);
   const [history]=await db.query<any[]>('SELECT a.assignment_id,a.action,a.evacuation_at,a.created_at,s.shelter_name,u.full_name recorded_by FROM evacuation_assignments a LEFT JOIN shelters s ON s.shelter_id=a.shelter_id LEFT JOIN users u ON u.user_id=a.recorded_by_user_id WHERE a.resident_id=? ORDER BY a.created_at DESC,a.assignment_id',[String(req.params.id)]);
-  res.json({resident:r,vulnerabilities:risks,...residentReadiness(r,risks),history});
+  const [outcomeHistory]=await db.query<any[]>('SELECT o.*,u.full_name recorded_by FROM resident_outcome_updates o LEFT JOIN users u ON u.user_id=o.recorded_by_user_id WHERE o.resident_id=? ORDER BY o.update_id DESC',[String(req.params.id)]);
+  res.json({resident:r,vulnerabilities:risks,...residentReadiness(r,risks),history,outcomeHistory});
 }));
 
 app.get('/api/records/quality',requireAuth,requireRoles('Super Admin','Data Encoder','Disaster Officer'),asyncRoute(async(_req,res)=>{
@@ -1263,6 +1262,23 @@ for (const path of ["residents", "shelters", "volunteers", "evacuation-routes", 
   const resource = resources[path]!;
   app.delete(`/api/${path}/:id`, requireAuth, requireRoles(...resource.writeRoles), asyncRoute(async (req, res) => {
     const recordId = String(req.params.id);
+    if(path==='volunteers'){
+      const [teams]=await db.query<any[]>('SELECT team_id FROM rescue_team_members WHERE volunteer_id=?',[recordId]);
+      if(teams.length)return res.status(409).json({message:'This responder belongs to a rescue team. Remove them from the team roster after any active mission finishes before deleting their registry record.'});
+    }
+    if(path==='residents'){
+      const connection=await db.getConnection();
+      try{
+        await connection.beginTransaction();
+        await connection.query('SELECT resident_id FROM residents WHERE resident_id=? FOR UPDATE',[recordId]);
+        const [missions]=await connection.query<any[]>('SELECT mission_id FROM rescue_active_residents WHERE resident_id=?',[recordId]);
+        if(missions.length){await connection.rollback();return res.status(409).json({message:'This resident has an active rescue mission. Finish or cancel the mission before deleting the resident.'});}
+        const [outcomes]=await connection.query<any[]>('SELECT resident_id FROM resident_outcomes WHERE resident_id=?',[recordId]);
+        if(outcomes.length){await connection.rollback();return res.status(409).json({message:'This resident has recorded outcome history. Preserve the record; mark it inactive instead of deleting it.'});}
+        const [result]=await connection.execute<any>('DELETE FROM residents WHERE resident_id=?',[recordId]);
+        await connection.commit();return result.affectedRows?res.status(204).end():res.status(404).json({message:'Resident not found'});
+      }catch(error){await connection.rollback();throw error;}finally{connection.release();}
+    }
     if (path === "shelters") {
       const connection = await db.getConnection();
       try {
@@ -1272,6 +1288,8 @@ for (const path of ["residents", "shelters", "volunteers", "evacuation-routes", 
           await connection.rollback();
           return res.status(404).json({ message: "Evacuation center not found" });
         }
+        const [missions]=await connection.query<any[]>("SELECT mission_id FROM rescue_missions WHERE shelter_id=? AND status NOT IN ('Arrived','Cancelled')",[recordId]);
+        if(missions.length){await connection.rollback();return res.status(409).json({message:'This center is the destination of an active rescue mission. Finish or cancel the mission before deleting the center.'});}
         await connection.execute(
           "UPDATE residents SET evacuation_shelter_id=NULL,evacuation_status=CASE WHEN evacuation_status='Evacuated' THEN 'For Evacuation' ELSE evacuation_status END WHERE evacuation_shelter_id=?",
           [recordId]

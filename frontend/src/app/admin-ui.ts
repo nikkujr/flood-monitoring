@@ -2,6 +2,15 @@ export function shortRecordId(id: string) {
   return /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(id) ? id.slice(0, 8).toUpperCase() : id;
 }
 
+export function recordedResidentOutcome(value: unknown) {
+  return value === 'Missing' || value === 'Deceased' ? value : '';
+}
+
+export function findTasks<T extends { page: string; label: string; description: string; keywords?: string }>(tasks: T[], allowedPages: string[], query: string) {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return tasks.filter(task => allowedPages.includes(task.page) && words.every(word => `${task.label} ${task.description} ${task.keywords ?? ''}`.toLowerCase().includes(word)));
+}
+
 export function searchResidents<T extends { name: string; household: string }>(residents: T[], query: string) {
   const search = query.trim().toLowerCase();
   return residents.filter(resident => resident.name.toLowerCase().includes(search) || resident.household.toLowerCase().includes(search));

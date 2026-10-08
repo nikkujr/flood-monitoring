@@ -41,6 +41,18 @@ try {
     .replace("CREATE DATABASE IF NOT EXISTS bantay_baha", `CREATE DATABASE IF NOT EXISTS \`${databaseName}\``)
     .replace("USE bantay_baha;", `USE \`${databaseName}\`;`);
   await connection.query(schema);
+  await connection.query(`ALTER TABLE \`${databaseName}\`.rescue_teams MODIFY vehicle VARCHAR(120) NULL`);
+
+  for (const [table, column, definition] of [
+    ['volunteers', 'responder_type', "ENUM('Volunteer','Barangay Tanod') NOT NULL DEFAULT 'Volunteer'"],
+    ['rescue_teams', 'leader_id', 'CHAR(36) NULL']
+  ]) {
+    const [columns] = await connection.query<mysql.RowDataPacket[]>(
+      'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND COLUMN_NAME=?',
+      [databaseName, table, column]
+    );
+    if (!columns.length) await connection.query(`ALTER TABLE \`${databaseName}\`.\`${table}\` ADD COLUMN \`${column}\` ${definition}`);
+  }
 
   const [passwordChangeColumns] = await connection.query<mysql.RowDataPacket[]>(
     "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='users' AND COLUMN_NAME='must_change_password'",

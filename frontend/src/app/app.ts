@@ -1,4 +1,4 @@
-import { ChangeDetectorRef, Component, HostListener, OnDestroy, OnInit, inject, signal } from '@angular/core';
+import { ChangeDetectorRef, Component, HostListener, OnDestroy, OnInit, ViewChild, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DatePipe } from '@angular/common';
 import { catchError, finalize, forkJoin, of, switchMap } from 'rxjs';
@@ -7,12 +7,14 @@ import { LiveMapComponent } from './live-map.component';
 import { PolygonEditorComponent } from './polygon-editor.component';
 import { LocationPickerComponent } from './location-picker.component';
 import { DssComponent } from './dss.component';
-import { dashboardCount, editorFieldSections, shortRecordId } from './admin-ui';
+import { dashboardCount, editorFieldSections, shortRecordId, findTasks, recordedResidentOutcome } from './admin-ui';
+import type { ResponseView } from './rescue.models';
 import type { DssData } from './dss.models';
 import {draftKey,draftValues,readDraft,writeDraft,removeDraft,type FormDraft} from './form-draft';
 
 type PageId = 'dashboard' | 'map' | 'reports' | 'residents' | 'households' | 'evacuation' | 'statistics' | 'dss' | 'notifications' | 'users';
 type PublicPage = 'home' | 'map' | 'report' | 'login';
+type NavigationTask = { page: PageId; label: string; description: string; keywords?: string; resource?: string; responseView?: ResponseView };
 type EditorOption = { value: string; label: string };
 type EditorField = {
   name: string;
@@ -45,6 +47,28 @@ export class App implements OnInit, OnDestroy {
   readonly api = inject(ApiService);
   private readonly changeDetector = inject(ChangeDetectorRef);
   menuOpen = false;
+  taskQuery = '';
+  centerMapOpen = false;
+  centerRecordsOpen = false;
+  @ViewChild(DssComponent) private dssWorkspace?: DssComponent;
+  get navigationTasks() {
+    const tasks: NavigationTask[] = [
+      {page:'dss',label:'Plan evacuation & rescue',description:'Select residents and send a rescue team.',keywords:'dispatch evacuation priority mission',responseView:'residents'},
+      {page:'dss',label:'Update rescue missions',description:'Track progress and confirm arrival.',keywords:'rescue escort pickup transport',responseView:'missions'},
+      {page:'dss',label:'Set up rescue teams',description:'Assign volunteers and barangay tanods to crews.',keywords:'leader vehicle foot responder',responseView:'teams'},
+      {page:'dss',label:'Missing & deceased residents',description:'Record outcomes and follow up missing residents.',keywords:'casualty casualties located death',responseView:'outcomes'},
+      {page:'evacuation',label:'Volunteers & tanods',description:'Maintain responder contacts and availability.',keywords:'rescue crew staff',resource:'volunteers'},
+      {page:'notifications',label:'Emergency hotlines',description:'Maintain public emergency contact numbers.',keywords:'phone contact help',resource:'emergency-contacts'},
+      ...this.navItems.map(item=>({page:item.id,label:item.label,description:this.pageDetails[item.id].description}))
+    ];
+    return findTasks(tasks,this.visibleNavItems.map(item=>item.id),this.taskQuery);
+  }
+  openTask(task:NavigationTask) {
+    this.setPage(task.page);
+    if(task.resource)this.selectResource(task.resource);
+    if(task.responseView){this.changeDetector.detectChanges();this.dssWorkspace?.selectTab('planner');this.dssWorkspace?.setResponseView(task.responseView);}
+  }
+  get currentSection(){return this.navGroups.find(group=>group.items.some(item=>item.id===this.activePage))?.label ?? '';}
   theme = document.documentElement.dataset['theme'] ?? 'system';
   residentImportOpen = false;
   residentImportCsv = '';
@@ -216,6 +240,7 @@ export class App implements OnInit, OnDestroy {
         this.editorReview = this.editorSections.map(section => ({ title: section.title, fields: section.fields.map(field => {
           const raw = String(values.get(field.name) ?? '');
           let value = field.type === 'household-lookup' ? this.selectedHouseholdLabel : field.type === 'location' ? 'Pinned on map' : field.options?.find(option => option.value === raw)?.label ?? raw;
+          if(this.editorOutcome&&field.name==='evacuationStatus')value=this.editorOutcome+' (recorded outcome)';
           if (raw === 'Other') value += `: ${values.get(field.name === 'vulnerabilityType' ? 'vulnerabilityOther' : 'relationshipOther') || 'Not specified'}`;
           return { label: field.label, value: value || 'Not provided' };
         }) }));
@@ -262,11 +287,11 @@ export class App implements OnInit, OnDestroy {
 
   get navGroups() {
     return [
-      { label: 'Overview', ids: ['dashboard', 'statistics'] },
-      { label: 'Emergency operations', ids: ['dss', 'map', 'reports', 'evacuation', 'notifications'] },
+      { label: 'Start here', ids: ['dashboard'] },
+      { label: 'Flood response', ids: ['reports', 'map', 'dss', 'evacuation', 'notifications'] },
       { label: 'Community records', ids: ['residents', 'households'] },
-      { label: 'Administration', ids: ['users'] }
-    ].map(group => ({ label: group.label, items: this.visibleNavItems.filter(item => group.ids.includes(item.id)) })).filter(group => group.items.length);
+      { label: 'Reporting & administration', ids: ['statistics', 'users'] }
+    ].map(group => ({ label: group.label, items: group.ids.map(id=>this.visibleNavItems.find(item=>item.id===id)).filter((item): item is typeof this.navItems[number]=>!!item) })).filter(group => group.items.length);
   }
 
   dashboardAttention?: { pending: number | '—'; residents: number | '—'; shelters: number | '—' };
@@ -393,6 +418,7 @@ export class App implements OnInit, OnDestroy {
   householdDetailsError = '';
   private householdDetailsRequest = 0;
   editorValues: Record<string, unknown> = {};
+  editorOutcome = '';
   fieldErrors: Record<string, string> = {};
   temporaryPassword = '';
   selectedMapFocus?: { id: string; resource: string; record: Record<string, unknown>; nonce: number };
@@ -463,22 +489,22 @@ export class App implements OnInit, OnDestroy {
     { id: 'reports', label: 'Flood Reports', icon: '!' },
     { id: 'residents', label: 'Residents', icon: '♙' },
     { id: 'households', label: 'Households', icon: '⌑' },
-    { id: 'evacuation', label: 'Evacuation Support', icon: '◇' },
+    { id: 'evacuation', label: 'Centers & Responders', icon: '⌂' },
     { id: 'statistics', label: 'Reports & Statistics', icon: '▥' },
-    { id: 'notifications', label: 'Notifications', icon: '♢' },
+    { id: 'notifications', label: 'Advisories & Hotlines', icon: '♢' },
     { id: 'users', label: 'User Accounts', icon: '⚙' }
   ];
 
   pageDetails: Record<PageId, { eyebrow: string; title: string; description: string; action: string }> = {
-    dashboard: { eyebrow: '', title: '', description: '', action: '' },
+    dashboard: { eyebrow: 'START HERE', title: 'Dashboard', description: 'See what needs attention and open your next task.', action: '' },
     map: { eyebrow: 'GEOSPATIAL OPERATIONS', title: 'Live Map & GIS', description: 'Review barangay boundaries, risk zones, incidents, routes, and evacuation shelters.', action: 'Add map record' },
     reports: { eyebrow: 'INCIDENT MANAGEMENT', title: 'Flood Reports', description: 'Validate community reports and coordinate a timely response.', action: 'New report' },
     residents: { eyebrow: 'COMMUNITY RECORDS', title: 'Residents', description: 'Manage resident information, vulnerability, and evacuation priority.', action: 'Add resident' },
     households: { eyebrow: 'COMMUNITY RECORDS', title: 'Households', description: 'Organize residents by household, zone, and current risk.', action: 'Add household' },
-    evacuation: { eyebrow: 'RESPONSE OPERATIONS', title: 'Evacuation Support', description: 'Coordinate shelters, volunteers, and emergency contacts.', action: 'Add shelter' },
+    evacuation: { eyebrow: 'FLOOD RESPONSE', title: 'Centers & Responders', description: 'Manage evacuation centers, resident rosters, and responder availability. Dispatch rescue teams in DSS.', action: 'Add shelter' },
     statistics: { eyebrow: 'REPORTING', title: 'Reports & Statistics', description: 'Review incident statistics and flood susceptibility references.', action: 'Export summary' },
     dss: { eyebrow: 'DECISION SUPPORT', title: 'Decision Support System', description: 'Assess zone priorities, assistance needs, and shelter readiness.', action: 'Situation report' },
-    notifications: { eyebrow: 'PUBLIC INFORMATION', title: 'Notifications', description: 'Create, send, and archive official flood advisories.', action: 'New advisory' },
+    notifications: { eyebrow: 'FLOOD RESPONSE', title: 'Advisories & Hotlines', description: 'Publish official flood advisories and maintain emergency phone numbers.', action: 'New advisory' },
     users: { eyebrow: 'SYSTEM ADMINISTRATION', title: 'User Accounts', description: 'Manage authorized local authority access and roles.', action: 'Add user' }
   };
 
@@ -518,7 +544,20 @@ export class App implements OnInit, OnDestroy {
     { name: 'Public flood advisory', id: 'NTF-004', detail: 'Affected zones · Minor incident', status: 'Sent', updated: '2 hrs ago' }
   ];
 
-  get currentPage() { return this.pageDetails[this.activePage]; }
+  get currentPage() {
+    const page=this.pageDetails[this.activePage];
+    if(this.activePage==='evacuation'){
+      const sections:Record<string,{title:string;description:string}>={
+        shelters:{title:'Evacuation centers',description:'Check capacity, view resident rosters, and record confirmed arrivals.'},
+        residents:{title:'Resident evacuation status',description:'Find a resident and review their current status and assigned center.'},
+        volunteers:{title:'Volunteers & tanods',description:'Maintain responder contacts and availability. Build and dispatch crews in DSS.'},
+        'emergency-contacts':{title:'Emergency hotlines',description:'Maintain the contact numbers used by officials and residents.'}
+      };
+      return {...page,...sections[this.currentResource]};
+    }
+    if(this.activePage==='notifications')return {...page,title:this.currentResource==='emergency-contacts'?'Emergency hotlines':'Public advisories'};
+    return page;
+  }
   get canReviewReports() { return ['Super Admin', 'Disaster Officer'].includes(this.api.user()?.role ?? ''); }
   get tableSortColumns() {
     const columns: Record<string, Array<{ label: string; field: string }>> = {
@@ -563,8 +602,8 @@ export class App implements OnInit, OnDestroy {
     if (this.activePage === 'map' && this.currentResource === 'risk-zones') return 'Add risk zone';
     if (this.activePage === 'map' && this.currentResource === 'shelters') return 'Add evacuation shelter';
     if (this.activePage === 'evacuation') return ({
-      shelters: 'Add shelter',
-      volunteers: 'Add volunteer',
+      shelters: 'Add evacuation center',
+      volunteers: 'Add responder',
       'emergency-contacts': 'Add emergency contact'
     } as Record<string, string>)[this.currentResource] ?? 'Add support record';
     return this.currentPage.action;
@@ -597,6 +636,7 @@ export class App implements OnInit, OnDestroy {
     if (this.activePage === 'evacuation' && this.currentResource === 'volunteers') return [
       { name: 'fullName', label: 'Full name', required: true }, { name: 'contactNumber', label: 'Contact number', required: true },
       { name: 'email', label: 'Email', type: 'email' },
+      { name: 'responderType', label: 'Responder type', type: 'select', required: true, options: options('Volunteer', 'Barangay Tanod') },
       { name: 'assignedZoneId', label: 'Assigned zone', type: 'select', options: this.zoneOptions },
       { name: 'availabilityStatus', label: 'Availability', type: 'select', required: true, options: options('Available', 'Assigned', 'Unavailable') },
       { name: 'notes', label: 'Notes', type: 'textarea' }
@@ -609,7 +649,7 @@ export class App implements OnInit, OnDestroy {
     ];
     if (this.activePage === 'evacuation' && this.currentResource === 'residents') return [
       { name: 'fullName', label: 'Resident', required: true },
-      { name: 'recordStatus', label: 'Resident status', type: 'select', required: true, options: options('Active', 'Inactive') },
+      { name: 'recordStatus', label: 'Registry record status', type: 'select', required: true, options: options('Active', 'Inactive') },
       { name: 'evacuationStatus', label: 'Evacuation status', type: 'select', required: true, options: options('Safe', 'For Monitoring', 'For Evacuation', 'Evacuated') },
       { name: 'evacuationShelterId', label: 'Evacuation center', type: 'select', options: this.shelterOptions }
     ];
@@ -644,7 +684,7 @@ export class App implements OnInit, OnDestroy {
         { name: 'houseType', label: 'Type of house', type: 'select', options: options('Concrete', 'Semi concrete', 'Light materials') },
         { name: 'emergencyContactName', label: 'Emergency contact name' }, { name: 'emergencyContactNumber', label: 'Emergency contact number', type: 'tel', placeholder: 'Mobile or landline number' },
         { name: 'priorityLevel', label: 'Priority level', type: 'select', required: true, options: options('Low', 'Medium', 'High') },
-        { name: 'recordStatus', label: 'Resident status', type: 'select', required: true, options: options('Active', 'Inactive') },
+        { name: 'recordStatus', label: 'Registry record status', type: 'select', required: true, options: options('Active', 'Inactive') },
         { name: 'evacuationStatus', label: 'Evacuation status', type: 'select', required: true, options: options('Safe', 'For Monitoring', 'For Evacuation', 'Evacuated') },
         { name: 'evacuationShelterId', label: 'Evacuation center', type: 'select', options: this.shelterOptions }
       ],
@@ -1237,6 +1277,7 @@ export class App implements OnInit, OnDestroy {
   }
 
   setPage(page: PageId, updateHistory = true) {
+    if(updateHistory)requestAnimationFrame(()=>{window.scrollTo({top:0});document.getElementById('main-workspace')?.focus({preventScroll:true});});
     this.headerNotificationsOpen = false;
     this.activePage = page;
     this.requestedAdminPage = page;
@@ -1288,6 +1329,8 @@ export class App implements OnInit, OnDestroy {
   }
 
   selectResource(resource: string) {
+    this.centerMapOpen=false;
+    this.centerRecordsOpen=false;
     this.currentResource = resource;
     if (this.activePage === 'map') this.setAdminMapLayer(resource);
     this.selectedMapFocus = undefined;
@@ -1667,6 +1710,7 @@ export class App implements OnInit, OnDestroy {
     this.editorDraft=readDraft(this.editorDraftKey);this.editorDraftPending=!!this.editorDraft;this.editorDraftSaved=false;this.editorDraftError='';this.editorDetailsLoading=false;
     this.reportReviewReady=false;this.reportReviewOptions=[];this.reportReviews=[];this.editorReportStatus='';
     const record = row ? this.rawRecords.get(row.id) : undefined;
+    this.editorOutcome=this.currentResource==='residents'?recordedResidentOutcome(record?.['outcome']):'';
     this.editorValues = {};
     this.fieldErrors = {};
     this.existingBarangayZones = this.currentResource === 'barangay-zones'
@@ -1766,6 +1810,7 @@ export class App implements OnInit, OnDestroy {
   focusMapRecord(row: { id: string }) {
     const record = this.rawRecords.get(row.id);
     if (!record) return;
+    if(this.activePage==='evacuation')this.centerMapOpen=true;
     if (this.currentResource === 'barangay-zones') this.selectedZoneId = row.id;
     this.selectedMapFocus = {
       id: row.id,
@@ -2360,7 +2405,7 @@ export class App implements OnInit, OnDestroy {
         : row['shelter_id']
           ? `${row['resident_occupancy'] ?? row['current_occupancy'] ?? 0}/${row['capacity'] ?? 0} residents · ${this.displayLocation(row['location_text'])}`
           : row['volunteer_id']
-            ? String(row['assigned_zone_id'] ? `Assigned zone: ${row['assigned_zone_id']}` : row['email'] ?? 'Unassigned')
+            ? String((row['responder_type'] ?? 'Volunteer') + ' · ' + (row['contact_number'] || 'No contact number recorded'))
             : row['route_id']
               ? String(row['description'] ?? `Shelter: ${row['destination_shelter_id'] ?? ''}`)
               : row['emergency_contact_id']
@@ -2370,7 +2415,7 @@ export class App implements OnInit, OnDestroy {
                   : String(row['email'] ?? row['address_line'] ?? row['message'] ?? (row['location_text'] ? this.displayLocation(row['location_text']) : values[2]) ?? ''),
       priorityReason: row['resident_id'] ? this.residentPriorityReason(row, true) : '',
       vulnerabilityReason: row['resident_id'] ? this.residentPriorityReason(row, false) : '',
-      status: String(row['record_status'] ?? row['verification_status'] ?? row['availability_status'] ?? row['status'] ?? row['risk_level'] ?? row['role'] ?? (row['is_active'] ? 'Active' : 'Inactive')),
+      status: String(['Missing','Deceased'].includes(String(row['outcome'])) ? row['outcome'] : row['record_status'] ?? row['verification_status'] ?? row['availability_status'] ?? row['status'] ?? row['risk_level'] ?? row['role'] ?? (row['is_active'] ? 'Active' : 'Inactive')),
       updated: this.formatDate(row['source_updated_at'] ?? row['updated_at'] ?? row['source_created_at'] ?? row['created_at'])
     };
   }

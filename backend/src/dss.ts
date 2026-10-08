@@ -3,7 +3,7 @@ export type Risk = typeof riskLevels[number];
 export interface DssFilters { zone?: string; risk?: string; from?: string; to?: string; severity?: string; evacuationStatus?: string; vulnerability?: string }
 export interface Zone { zone_id: string; zone_name: string }
 export interface Household { household_id: string; household_number: string; zone_id: string; address_line: string; head_of_household_name: string }
-export interface Resident { resident_id: string; household_id: string; full_name: string; date_of_birth: string | null; address_line: string; vulnerability_type: string | null; vulnerability_other: string | null; pwd_specify: string | null; morbidity: string | null; can_swim: string | null; house_type: string | null; priority_level: string; evacuation_status: string }
+export interface Resident { resident_id: string; household_id: string; full_name: string; date_of_birth: string | null; address_line: string; vulnerability_type: string | null; vulnerability_other: string | null; pwd_specify: string | null; morbidity: string | null; can_swim: string | null; house_type: string | null; priority_level: string; evacuation_status: string; outcome?:string|null }
 export interface Report { report_id: string; tracking_code: string; location_text: string; severity_level: string; status: string; created_at: string; incident_type: string }
 export interface Shelter { shelter_id: string; shelter_name: string; zone_id: string; location_text: string; capacity: number; current_occupancy: number | null; status: string }
 export interface DssSource { zones: Zone[]; households: Household[]; residents: Resident[]; reports: Report[]; reportZones: {report_id: string; zone_id: string}[]; shelters: Shelter[] }
@@ -72,7 +72,7 @@ export function buildDss(source: DssSource, filters: DssFilters = {}, now = new 
   }
   const reports = source.reports.filter(r=>(!filters.from || r.created_at.slice(0,10)>=filters.from)
     && (!filters.to || r.created_at.slice(0,10)<=filters.to) && (!filters.severity || r.severity_level===filters.severity));
-  const people = source.residents.map(r=>({...r,vulnerabilities:vulnerabilities(r,today),household:households.get(r.household_id)}));
+  const people = source.residents.filter(r=>r.outcome!=='Deceased').map(r=>({...r,vulnerabilities:vulnerabilities(r,today),household:households.get(r.household_id)}));
   const populationMatches = (r: typeof people[number]) => (!filters.evacuationStatus || r.evacuation_status===filters.evacuationStatus)
     && (!filters.vulnerability || (filters.vulnerability==='Any' ? r.vulnerabilities.length>0 : filters.vulnerability==='Other' ? r.vulnerabilities.some(v=>!['Senior citizen','Child','PWD','Pregnant','Morbidity'].includes(v)) : r.vulnerabilities.includes(filters.vulnerability)));
   const zoneRows = source.zones.filter(z=>!filters.zone || z.zone_id===filters.zone).map(zone=>{
@@ -101,10 +101,10 @@ export function buildDss(source: DssSource, filters: DssFilters = {}, now = new 
     const priority = priorityFor(zone.risk,r.vulnerabilities.length>0,r.priority_level);
     return {id:r.resident_id,name:r.full_name,householdId:r.household_id,household:r.household!.household_number,zoneId:zone.id,zone:zone.name,address:r.address_line || r.household!.address_line,
       vulnerabilities:r.vulnerabilities,details:[present(r.pwd_specify)?r.pwd_specify:null,present(r.morbidity)?r.morbidity:null,present(r.vulnerability_other)?r.vulnerability_other:null].filter(Boolean),
-      risk:zone.risk,priority,status:r.evacuation_status,manualPriority:r.priority_level,
+      risk:zone.risk,priority,status:r.evacuation_status,outcome:r.outcome??null,manualPriority:r.priority_level,
       assistance:[r.can_swim==='No'?'Cannot swim':null,r.house_type==='Light materials'?'House: light materials':null].filter(Boolean)};
   }).sort((a,b)=>priorityOrder.indexOf(a.priority)-priorityOrder.indexOf(b.priority) || riskLevels.indexOf(b.risk)-riskLevels.indexOf(a.risk) || a.name.localeCompare(b.name));
-  const evacuation = priorities.filter(r=>(r.priority!=='Lower' || r.status==='For Evacuation') && r.status!=='Evacuated');
+  const evacuation = priorities.filter(r=>r.outcome!=='Missing' && (r.priority!=='Lower' || r.status==='For Evacuation') && r.status!=='Evacuated');
   const priorityHouseholds = [...new Set(evacuation.map(r=>r.householdId))].map(id=>{
     const members = evacuation.filter(r=>r.householdId===id);
     const first = members[0]!;

@@ -17,16 +17,18 @@ export async function criticalZoneStatus(connection: PoolConnection, zoneId: str
   const [reports] = await connection.query<any[]>(`SELECT fr.report_id,fr.status,fr.severity_level,fr.updated_at
     FROM flood_reports fr JOIN flood_report_zones frz ON frz.report_id=fr.report_id
     WHERE frz.zone_id=? AND fr.status='Validated' ORDER BY fr.report_id FOR UPDATE`, [zoneId]);
-  const active = residents.filter(r => r.record_status === 'Active');
+  const [outcomes]=residents.length?await connection.query<any[]>('SELECT resident_id,outcome FROM resident_outcomes WHERE resident_id IN (?) FOR UPDATE',[residents.map(r=>r.resident_id)]):[[]];
+  for(const resident of residents)resident.outcome=outcomes.find(o=>o.resident_id===resident.resident_id)?.outcome??null;
+  const active = residents.filter(r => r.record_status === 'Active'&&r.outcome!=='Deceased');
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const risk = assessRisk(reports as Report[], active.filter(r => vulnerabilities(r as Resident, today).length).length).risk;
-  const eligible = active.filter(r => r.evacuation_status !== 'Evacuated');
+  const eligible = active.filter(r => r.evacuation_status !== 'Evacuated'&&r.outcome!=='Missing');
   const revision = createHash('sha256').update(JSON.stringify({ today, residents, reports })).digest('hex');
   const preview = {
     zone: zones[0].zone_name, risk, revision, eligibleCount: eligible.length,
-    evacuatedCount: active.length - eligible.length, inactiveCount: residents.length - active.length,
+    evacuatedCount: active.filter(r=>r.evacuation_status==='Evacuated'&&r.outcome!=='Missing').length, inactiveCount: residents.filter(r=>r.record_status!=='Active').length,
     statusCounts: Object.fromEntries(['Safe', 'For Monitoring', 'For Evacuation'].map(status => [status, eligible.filter(r => r.evacuation_status === status).length])),
-    residents: residents.map(r => ({ id: String(r.resident_id), name: String(r.full_name), household: String(r.household_number), status: String(r.evacuation_status), recordStatus: String(r.record_status) }))
+    residents: residents.map(r => ({ id: String(r.resident_id), name: String(r.full_name), household: String(r.household_number), status: String(r.evacuation_status), outcome:r.outcome,recordStatus: String(r.record_status) }))
       .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
   };
   if (!input) return preview;

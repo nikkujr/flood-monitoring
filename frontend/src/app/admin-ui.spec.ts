@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { dashboardCount, editorFieldSections, residentFieldSections, searchResidents, shortRecordId } from './admin-ui.ts';
+import { dashboardCount, editorFieldSections, residentFieldSections, searchResidents, shortRecordId, findTasks, recordedResidentOutcome } from './admin-ui.ts';
+
+const tasks = [{ page: 'dss', label: 'Plan rescue', description: 'Send a crew', keywords: 'tanod mission' }, { page: 'users', label: 'User accounts', description: 'Manage access' }];
+assert.deepEqual(findTasks(tasks, ['dss'], ''), [tasks[0]]);
+assert.deepEqual(findTasks(tasks, ['dss'], ' TANOD rescue '), [tasks[0]]);
+assert.deepEqual(findTasks(tasks, ['dss'], 'accounts'), []);
+assert.deepEqual(findTasks(tasks, ['dss'], 'tanod unavailable'), []);
 
 assert.equal(shortRecordId('b4309248-d200-4361-a205-4eecdcaa35c5'), 'B4309248');
 assert.equal(shortRecordId('BB-2026-A81D20F3'), 'BB-2026-A81D20F3');
@@ -24,3 +30,7 @@ assert.deepEqual(searchResidents(residents, '   '), residents);
 assert.deepEqual(searchResidents(residents, 'missing'), []);
 assert.deepEqual(searchResidents([], 'Maria'), []);
 console.log('Admin grouping and record reference checks passed.');
+
+assert.equal(recordedResidentOutcome('Missing'),'Missing');
+assert.equal(recordedResidentOutcome('Deceased'),'Deceased');
+for(const value of ['Located','Safe',null,undefined])assert.equal(recordedResidentOutcome(value),'');

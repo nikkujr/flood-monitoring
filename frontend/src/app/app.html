@@ -275,7 +275,7 @@
     </div>
   </aside>
 
-  <main>
+  <main id="main-workspace" tabindex="-1">
     <header class="topbar">
       <button class="menu" (click)="menuOpen = !menuOpen" aria-label="Toggle menu">☰</button>
       <div class="header-greeting">
@@ -283,6 +283,7 @@
         <strong [title]="'Welcome, ' + api.user()?.fullName">Welcome, {{ api.user()?.fullName }}</strong>
       </div>
       <div class="top-actions">
+        <button type="button" class="secondary task-finder-trigger" (click)="taskQuery = ''; taskFinder.showModal()" aria-haspopup="dialog">⌕ Find a task</button>
         <label class="theme-selector">Theme <select [ngModel]="theme" (ngModelChange)="setTheme($event)" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
         <button type="button" class="bell" aria-label="Recent notifications" [attr.aria-expanded]="headerNotificationsOpen" aria-controls="header-notifications" (click)="toggleHeaderNotifications()"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></button>
         <div class="avatar">{{ api.user()?.fullName?.slice(0, 2) }}</div>
@@ -294,20 +295,27 @@
             @else if (dashboardNotifications.length) {
               <ul>@for (notice of dashboardNotifications; track notice['notification_id']) { <li><b>{{ notice['title'] }}</b><span>{{ notice['message'] }}</span><small>{{ notice['sent_at'] || 'Sent' }}</small></li> }</ul>
             } @else { <p>No sent advisories yet.</p> }
-            @if (canReviewReports) { <button type="button" class="header-notifications-manage" (click)="openDashboardNotifications()">Manage notifications →</button> }
+            @if (canReviewReports) { <button type="button" class="header-notifications-manage" (click)="openDashboardNotifications()">Manage advisories →</button> }
           </section>
         }
       </div>
     </header>
 
+    <dialog #taskFinder class="task-finder" aria-labelledby="task-finder-title" (click)="$event.target === taskFinder ? taskFinder.close() : null">
+      <div class="task-finder-heading"><div><h2 id="task-finder-title">What do you need to do?</h2><p>Search a task or choose a destination.</p></div><button type="button" class="secondary" aria-label="Close task finder" (click)="taskFinder.close()">×</button></div>
+      <label>Find a task<input type="search" autofocus [(ngModel)]="taskQuery" placeholder="Try rescue, tanod, residents, or hotlines" /></label>
+      <div class="task-finder-results">@for(task of navigationTasks;track task.label){<button type="button" (click)="taskFinder.close(); openTask(task)"><span><b>{{task.label}}</b><small>{{task.description}}</small></span><span aria-hidden="true">→</span></button>}@empty{<p role="status">No matching tasks. Try a shorter search.</p>}</div>
+      <small class="task-finder-note">Searches available pages and tasks. Search resident names inside the resident list.</small>
+    </dialog>
     <section class="content">
+      <nav class="workspace-location" aria-label="Current location"><button type="button" (click)="setPage('dashboard')">Dashboard</button>@if(activePage !== 'dashboard'){<span aria-hidden="true">/</span><span>{{currentSection}}</span><span aria-hidden="true">/</span><b>{{currentPage.title}}</b>}</nav>
       @if (errorMessage) { <div class="connection-error"><span>!</span>{{ errorMessage }}<button type="button" (click)="errorMessage = ''" aria-label="Dismiss error message">×</button></div> }
       @if (successMessage) { <div class="admin-success" role="status"><span>✓</span>{{ successMessage }}<button (click)="successMessage = ''" aria-label="Dismiss success message">×</button></div> }
       @if (loading) { <div class="loading-bar" role="status"><span class="mini-flood-icon" aria-hidden="true"><b>💧</b><i></i><i></i></span><strong>Loading flood information…</strong></div> }
       @if (activePage === 'dashboard') {
         <div class="page-heading">
-          <div><span class="eyebrow">COMMAND CENTER</span><h1>Flood readiness overview</h1><p>Monitor community risk, residents, and active response operations.</p></div>
-          @if (canReviewReports) { <button class="primary" (click)="setPage('reports')">Review reports</button> }
+          <div><span class="eyebrow">START HERE</span><h1>Dashboard</h1><p>See what needs attention, then choose your next task.</p></div>
+          <button type="button" class="primary" (click)="taskQuery = ''; taskFinder.showModal()">Find a task</button>
         </div>
 
         @if (dashboardAlert) {
@@ -315,14 +323,6 @@
             <span class="alert-icon">!</span><div><strong>{{ dashboardAlert['severity_level'] }}: {{ dashboardAlert['incident_type'] }} in {{ displayLocation(dashboardAlert['location_text']) }}</strong><p>{{ dashboardAlert['affected_zones'] ? 'Affected zones: ' + dashboardAlert['affected_zones'] + '. ' : '' }}{{ dashboardAlert['description'] }}</p></div>
             @if (canReviewReports) { <button (click)="openDashboardReports()">View incident →</button> }
           </div>
-        }
-
-        @if (weather; as w) {
-          <article class="weather-panel dashboard-weather" aria-label="Current weather in Colacling">
-            <div class="weather-current"><span class="weather-icon" aria-hidden="true">{{ weatherIcon(w.current.weather_code) }}</span><div><span class="eyebrow">COLACLING WEATHER</span><h2>{{ w.current.temperature_2m }}°C</h2><b>{{ weatherDescription(w.current.weather_code) }}</b><small>Lupi, Camarines Sur</small></div></div>
-            <div class="weather-details"><span><small>Feels like</small><b>{{ w.current.apparent_temperature }}°C</b></span><span><small>Humidity</small><b>{{ w.current.relative_humidity_2m }}%</b></span><span><small>Wind</small><b>{{ w.current.wind_speed_10m }} km/h</b></span><span><small>Rain now</small><b>{{ w.current.rain }} mm</b></span><span><small>Today's rain chance</small><b>{{ w.forecast[0]?.precipitationProbability ?? 0 }}%</b></span></div>
-            <small class="weather-source">Updated {{ w.updatedAt }} · Open-Meteo forecast</small>
-          </article>
         }
 
         <section class="attention-panel" aria-labelledby="attention-title">
@@ -336,10 +336,18 @@
           } @else { <p role="status">{{ loading ? 'Checking response tasks…' : 'Response counts are unavailable. Refresh to try again.' }}</p> }
         </section>
 
-        <section class="attention-panel" aria-labelledby="quality-title">
+        <details class="workspace-disclosure"><summary>Local weather forecast</summary>@if (weather; as w) {
+          <article class="weather-panel dashboard-weather" aria-label="Current weather in Colacling">
+            <div class="weather-current"><span class="weather-icon" aria-hidden="true">{{ weatherIcon(w.current.weather_code) }}</span><div><span class="eyebrow">COLACLING WEATHER</span><h2>{{ w.current.temperature_2m }}°C</h2><b>{{ weatherDescription(w.current.weather_code) }}</b><small>Lupi, Camarines Sur</small></div></div>
+            <div class="weather-details"><span><small>Feels like</small><b>{{ w.current.apparent_temperature }}°C</b></span><span><small>Humidity</small><b>{{ w.current.relative_humidity_2m }}%</b></span><span><small>Wind</small><b>{{ w.current.wind_speed_10m }} km/h</b></span><span><small>Rain now</small><b>{{ w.current.rain }} mm</b></span><span><small>Today's rain chance</small><b>{{ w.forecast[0]?.precipitationProbability ?? 0 }}%</b></span></div>
+            <small class="weather-source">Updated {{ w.updatedAt }} · Open-Meteo forecast</small>
+          </article>
+        }</details>
+
+        <details class="workspace-disclosure"><summary>Data quality checks · Review record completeness</summary><section class="attention-panel" aria-labelledby="quality-title">
           <div class="panel-head"><div><span class="eyebrow">RECORD READINESS</span><h2 id="quality-title">Data quality checks</h2><p>Current active resident records and flood-report review completeness. Counts can overlap.</p></div><button type="button" class="secondary" (click)="loadRecordQuality()">Refresh checks</button></div>
           @if(qualityError){<p class="form-error" role="alert">{{qualityError}}</p>} @else if(quality;as checks){<div class="quality-grid">@for(card of qualityCards;track card.key){@if(canReviewReports || (card.key !== 'pending' && card.key !== 'missingZone')){<button type="button" (click)="openQualityRecords(card.key)"><strong>{{checks[card.key]}}</strong><b>{{card.title}}</b><span>{{card.hint}}</span><small>Inspect records →</small></button>}}</div>} @else {<p role="status">Checking record completeness…</p>}
-        </section>
+        </section></details>
         <div class="metrics">
           @for (metric of metrics; track metric.label) {
             <button type="button" class="metric" (click)="openDashboardMetric(metric)" [disabled]="!canOpenDashboardMetric(metric.page)" [attr.aria-label]="'Open ' + metric.label.toLowerCase()">
@@ -395,7 +403,7 @@
           </article>
         </div>
         <article class="panel dashboard-notifications-panel">
-          <div class="panel-head"><div><span class="eyebrow">SYSTEM NOTIFICATIONS</span><h2>Recent sent advisories</h2></div>@if (canReviewReports) { <button class="text-button" (click)="openDashboardNotifications()">Manage →</button> }</div>
+          <div class="panel-head"><div><span class="eyebrow">PUBLIC ADVISORIES</span><h2>Recent sent advisories</h2></div>@if (canReviewReports) { <button class="text-button" (click)="openDashboardNotifications()">Manage →</button> }</div>
           @if (dashboardNotifications.length) {
             <div class="dashboard-notification-list">
               @for (notice of dashboardNotifications; track notice['notification_id']) {
@@ -464,14 +472,14 @@
               </div>
             }
             @if (activePage === 'notifications') {
-              <button type="button" class="primary" (click)="openNewAdvisory()">＋ New advisory</button>
-              <button type="button" class="secondary" [attr.aria-pressed]="currentResource === 'emergency-contacts'" (click)="selectResource('emergency-contacts')">Emergency hotlines</button>
+              @if(currentResource === 'notifications'){<button type="button" class="primary" (click)="openNewAdvisory()">＋ New advisory</button>}
+
             }
             @if (editorFields.length && canManageCurrentResource && activePage !== 'notifications' && !(activePage === 'evacuation' && currentResource === 'residents') && !(activePage === 'residents' && isHistoricalResidentYear)) { <button class="primary" (click)="openEditor()">{{hasNewRecordDraft ? 'Resume draft' : '＋ ' + currentActionLabel}}</button> }
           </div>
         </div>
         @if (activePage === 'residents') {
-          <section class="resident-year-overview" aria-label="Resident summary for selected year">
+          <details class="workspace-disclosure resident-summary-disclosure"><summary>{{selectedResidentYear}} resident summary · {{residentYearSummary.totalResidents}} residents · {{residentYearSummary.highPriorityResidents}} high priority</summary><section class="resident-year-overview" aria-label="Resident summary for selected year">
             <div class="resident-year-heading"><div><span class="eyebrow">ANNUAL RESIDENT SNAPSHOT</span><h2>{{ selectedResidentYear }} resident records</h2><p>{{ isHistoricalResidentYear ? 'Historical snapshot. Later profile changes do not alter these records.' : 'Current-year snapshot synchronized with the live resident registry.' }}</p></div>@if (isHistoricalResidentYear) { <span class="snapshot-badge">Read-only</span> }</div>
             <div class="resident-summary-cards">
               <button type="button" (click)="openResidentSummary('residents')" [class.active]="!activeResourceFilterCount" aria-label="Show all resident records"><i class="resident-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></i><span>Residents</span><b>{{ residentYearSummary.totalResidents }}</b><small>Registered people</small><em aria-hidden="true">→</em></button>
@@ -480,16 +488,18 @@
               <button type="button" (click)="openResidentSummary('priority')" [class.active]="resourceFilters['priority'] === 'High'" aria-label="Show high-priority residents"><i class="resident-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5M12 18h.01"/></svg></i><span>High priority</span><b>{{ residentYearSummary.highPriorityResidents }}</b><small>Priority level marked high</small><em aria-hidden="true">→</em></button>
             </div>
             <div class="vulnerability-summary"><b>Vulnerability counts</b><span>Senior citizens <strong>{{ residentYearSummary.seniorCitizens }}</strong></span><span>Children <strong>{{ residentYearSummary.children }}</strong></span><span>Persons with disability <strong>{{ residentYearSummary.personsWithDisability }}</strong></span><span>Pregnant <strong>{{ residentYearSummary.pregnantResidents }}</strong></span><span>Morbidity <strong>{{ residentYearSummary.residentsWithMorbidity }}</strong></span></div>
-          </section>
+          </section></details>
         }
         <article class="panel workspace-panel" [class.notifications-workspace]="activePage === 'notifications'">
           @if (activePage === 'notifications') {
             <div class="resource-tabs" role="group" aria-label="Record categories"><button type="button" [attr.aria-pressed]="currentResource === 'notifications'" [class.active]="currentResource === 'notifications'" (click)="selectResource('notifications')">Advisories</button><button type="button" [attr.aria-pressed]="currentResource === 'emergency-contacts'" [class.active]="currentResource === 'emergency-contacts'" (click)="selectResource('emergency-contacts')">Emergency hotlines</button></div>
             @if (currentResource === 'emergency-contacts') {
-              <div class="panel-head"><div><h2>Emergency hotlines</h2><p>Public, active hotlines appear in the public emergency contacts. Select a record to update it.</p></div><button type="button" class="primary" (click)="openEditor()">＋ Add emergency hotline</button></div>
+              <div class="panel-head"><p>Active public hotlines appear on the public site.</p><button type="button" class="primary" (click)="openEditor()">＋ Add emergency hotline</button></div>
             }
           }
-          <form class="toolbar" (submit)="searchResource($event, resourceSearch.value)"><label><span>⌕</span><input #resourceSearch [value]="searchTerm" aria-label="Search records" placeholder="Search {{ currentResource === 'emergency-contacts' ? 'emergency hotlines' : currentPage.title.toLowerCase() }}..." /></label><button class="secondary" type="submit">Search</button></form>
+          @if(activePage === 'evacuation'){<div class="resource-tabs" role="group" aria-label="Record categories"><button type="button" [attr.aria-pressed]="currentResource === 'shelters'" [class.active]="currentResource === 'shelters'" (click)="selectResource('shelters')">Evacuation centers</button><button type="button" [attr.aria-pressed]="currentResource === 'residents'" [class.active]="currentResource === 'residents'" (click)="selectResource('residents')">Resident status</button><button type="button" [attr.aria-pressed]="currentResource === 'volunteers'" [class.active]="currentResource === 'volunteers'" (click)="selectResource('volunteers')">Volunteers &amp; Tanods</button><button type="button" [attr.aria-pressed]="currentResource === 'emergency-contacts'" [class.active]="currentResource === 'emergency-contacts'" (click)="selectResource('emergency-contacts')">Emergency hotlines</button></div>}
+          @if(activePage === 'evacuation' && currentResource === 'volunteers'){<div class="workspace-next"><span>Ready to assign a crew?</span><button type="button" class="secondary" (click)="openTask({page:'dss',label:'Rescue teams',description:'',responseView:'teams'})">Open rescue teams →</button></div>}
+          <form class="toolbar" (submit)="searchResource($event, resourceSearch.value)"><label><span>⌕</span><input #resourceSearch [value]="searchTerm" aria-label="Search records" placeholder="Search {{ currentPage.title.toLowerCase() }}..." /></label><button class="secondary" type="submit">Search</button></form>
           @if (searchTerm || activeResourceFilterCount) {
             <div class="active-filter-chips" aria-label="Active search and filters">
               @if (searchTerm) { <button type="button" (click)="removeFilter('search')" aria-label="Remove search filter">Search: {{ searchTerm }} <span aria-hidden="true">×</span></button> }
@@ -498,7 +508,7 @@
             </div>
           }
           @if (activePage === 'evacuation') {
-            <div class="resource-tabs" role="group" aria-label="Record categories"><button type="button" [attr.aria-pressed]="currentResource === 'shelters'" [class.active]="currentResource === 'shelters'" (click)="selectResource('shelters')">Shelters</button><button type="button" [attr.aria-pressed]="currentResource === 'residents'" [class.active]="currentResource === 'residents'" (click)="selectResource('residents')">Residents</button><button type="button" [attr.aria-pressed]="currentResource === 'volunteers'" [class.active]="currentResource === 'volunteers'" (click)="selectResource('volunteers')">Volunteers</button><button type="button" [attr.aria-pressed]="currentResource === 'emergency-contacts'" [class.active]="currentResource === 'emergency-contacts'" (click)="selectResource('emergency-contacts')">Emergency contacts</button></div>
+
             @if (currentResource === 'residents' && selectedEvacuationCenterName) { <div class="selected-center-banner"><span>Resident roster</span><b>{{ selectedEvacuationCenterName }}</b><button type="button" (click)="selectResource('residents')">Show all residents</button></div> }
             @if (currentResource === 'shelters') {
               <section class="evacuation-center-overview" aria-label="Evacuation centers">
@@ -518,7 +528,7 @@
                   } @empty { <div class="table-feedback">No evacuation centers have been added.</div> }
                 </div>
               </section>
-              <app-live-map [full]="true" [visibleLayers]="evacuationMapLayers" [focusRecord]="selectedMapFocus" [refreshNonce]="mapRefreshNonce"></app-live-map>
+              <details #centerMap class="workspace-disclosure center-map-disclosure" [open]="centerMapOpen" (toggle)="centerMapOpen = centerMap.open"><summary>View evacuation centers on the map</summary>@if(centerMapOpen){<app-live-map [full]="true" [visibleLayers]="evacuationMapLayers" [focusRecord]="selectedMapFocus" [refreshNonce]="mapRefreshNonce"></app-live-map>}</details>
             }
           }
           @if (activePage === 'map') {
@@ -567,6 +577,8 @@
             </div>
             <nav class="pagination" aria-label="Record pages"><span>Page {{ page }} of {{ totalPages }} · {{ totalItems }} records</span><div><button type="button" aria-label="Previous page" [disabled]="loading || page <= 1" (click)="changePage(page - 1)">‹</button><button type="button" class="active" aria-current="page">{{ page }}</button><button type="button" aria-label="Next page" [disabled]="loading || page >= totalPages" (click)="changePage(page + 1)">›</button></div></nav>
           } @else {
+            @if(activePage === 'evacuation' && currentResource === 'shelters'){<button type="button" class="center-records-toggle" [attr.aria-expanded]="centerRecordsOpen" (click)="centerRecordsOpen = !centerRecordsOpen">{{centerRecordsOpen ? 'Hide center records' : 'Manage center records · Edit or remove a center'}} <span aria-hidden="true">{{centerRecordsOpen ? '−' : '+'}}</span></button>}
+            @if(activePage !== 'evacuation' || currentResource !== 'shelters' || centerRecordsOpen){
             <div class="data-table" [class.shelter-table]="activePage === 'evacuation' && currentResource === 'shelters'" [class.household-table]="activePage === 'households' || activePage === 'residents'" [class.hotline-table]="currentResource === 'emergency-contacts'" [class.flood-report-table]="activePage === 'reports'">
               <div class="table-head">@for (column of tableSortColumns; track column.label) { @if (column.label === 'DETAILS') { <span>{{ column.label }}</span> } @else { <button type="button" (click)="sortColumn(column.field)" [attr.aria-label]="'Sort by ' + column.label">{{ column.label }} <i>{{ sortIndicator(column.field) }}</i></button> } }<span class="actions-heading">Actions</span></div>
               @if (loading) { <div class="table-feedback" role="status">Loading records…</div> }
@@ -597,6 +609,7 @@
               }
             </div>
             <nav class="pagination" aria-label="Record pages"><span>Page {{ page }} of {{ totalPages }} · {{ totalItems }} records</span><div><button type="button" aria-label="Previous page" [disabled]="loading || page <= 1" (click)="changePage(page - 1)">‹</button><button type="button" class="active" aria-current="page">{{ page }}</button><button type="button" aria-label="Next page" [disabled]="loading || page >= totalPages" (click)="changePage(page + 1)">›</button></div></nav>
+            }
           }
         </article>
       }
@@ -690,12 +703,19 @@
                 <button type="button" class="lookup-trigger" (click)="openHouseholdLookup()"><span>{{ selectedHouseholdLabel || 'No household selected' }}</span><b>{{ selectedHouseholdLabel ? 'Change' : 'Find household' }}</b></button>
               }
               @else if (field.type === 'select') {
+                @if(editorOutcome && (field.name === 'evacuationStatus' || field.name === 'evacuationShelterId')) {
+                  <input type="hidden" [name]="field.name" [value]="field.name === 'evacuationStatus' ? 'For Monitoring' : ''" />
+                  <span class="recorded-outcome-value">{{field.name === 'evacuationStatus' ? editorOutcome : 'None · excluded from shelter placement'}}</span>
+                  @if(field.name === 'evacuationStatus'){<small class="recorded-outcome-help">Recorded outcome. Corrections must be recorded in DSS → Missing &amp; deceased to preserve confirmation and history.</small><button type="button" class="secondary" (click)="openResidentDetails({id:editorId},residentProfileDialog)">View outcome history</button>}
+                } @else {
                 <select [name]="field.name" [required]="field.required" [attr.aria-invalid]="!!fieldErrors[field.name]" (change)="editorValues[field.name] = $any($event.target).value">
                   <option value="" [selected]="editorValue(field.name) === ''">{{ field.required ? 'Select an option' : 'None' }}</option>
                   @for (option of field.options ?? []; track option.value) {
                     <option [value]="option.value" [selected]="editorValue(field.name) === option.value">{{ option.label }}</option>
                   }
                 </select>
+                }
+                @if(editorOutcome && field.name === 'recordStatus'){<small class="recorded-outcome-help">Active means this registry record is retained for use. The resident’s recorded outcome is {{editorOutcome}}.</small>}
                 @if (field.name === 'vulnerabilityType' && editorValue(field.name) === 'Other') { <input name="vulnerabilityOther" placeholder="Please specify vulnerability" [value]="editorValues['vulnerabilityOther'] ?? ''" /> }
                 @if (field.name === 'relationshipToHead' && editorValue(field.name) === 'Other') { <input name="relationshipOther" placeholder="Please specify relationship" [value]="editorValues['relationshipOther'] ?? ''" /> }
               }
@@ -820,9 +840,9 @@
   @if(residentDetailsLoading){<p role="status">Loading resident profile…</p>}
   @if(residentDetailsError){<p class="form-error" role="alert">{{residentDetailsError}}</p>}
   @if(residentDetails;as details){@let r=details.resident;
-    <div class="household-facts"><span><b>Household</b>{{r['household_number'] || 'Not recorded'}}</span><span><b>Barangay zone</b>{{r['zone_name'] || 'Not recorded'}}</span><span><b>Birth date</b>{{r['date_of_birth'] | date:'mediumDate'}}</span><span><b>Address</b>{{r['address_line'] || 'Not recorded'}}</span><span><b>Contact number</b>{{r['contact_number'] || 'Not recorded'}}</span><span><b>Emergency contact</b>{{r['emergency_contact_name'] || 'Not recorded'}} · {{r['emergency_contact_number'] || 'No number'}}</span><span><b>Record status</b>{{r['record_status']}}</span><span><b>Evacuation status</b>{{r['evacuation_status']}}</span><span><b>Evacuation center</b>{{r['shelter_name'] || 'Not assigned'}}</span><span><b>Priority</b>{{r['priority_level']}}</span></div>
+    <div class="household-facts"><span><b>Household</b>{{r['household_number'] || 'Not recorded'}}</span><span><b>Barangay zone</b>{{r['zone_name'] || 'Not recorded'}}</span><span><b>Birth date</b>{{r['date_of_birth'] | date:'mediumDate'}}</span><span><b>Address</b>{{r['address_line'] || 'Not recorded'}}</span><span><b>Contact number</b>{{r['contact_number'] || 'Not recorded'}}</span><span><b>Emergency contact</b>{{r['emergency_contact_name'] || 'Not recorded'}} · {{r['emergency_contact_number'] || 'No number'}}</span><span><b>Record status</b>{{r['record_status']}}</span><span><b>Resident outcome</b>{{r['outcome'] || 'No outcome reported'}}</span><span><b>Evacuation status</b>{{r['evacuation_status']}}</span><span><b>Evacuation center</b>{{r['shelter_name'] || 'Not assigned'}}</span><span><b>Priority</b>{{r['priority_level']}}</span></div>
     <div class="readiness-summary"><b>Vulnerability and readiness</b><p>{{details.vulnerabilities.join(' · ') || 'No vulnerabilities recorded'}}</p><p>{{details.flags.join(' · ') || 'No emergency contact or center-assignment gaps found for this active record.'}}</p>@if(details.needsAssistance){<p>Recorded vulnerability, high priority, or inability to swim indicates assistance considerations.</p>}</div>
-    <h3>Evacuation assignment history</h3><div class="household-member-list">@for(entry of details.history;track entry.assignment_id){<article><h4>{{entry.action}}</h4><p>{{entry.action === 'Returned Home' ? 'Returned home' : (entry.shelter_name || 'Center no longer available')}}</p><p>{{entry.evacuation_at | date:'medium'}} · Recorded by {{entry.recorded_by || 'Unavailable'}}</p></article>} @empty {<p>No evacuation assignments recorded yet.</p>}</div>
+    <h3>Missing / deceased outcome history</h3><div class="household-member-list">@for(entry of details.outcomeHistory;track $index){<article><h4>{{entry.outcome}}</h4><p>{{entry.source}} · {{entry.last_seen_location}}</p><p>{{entry.notes}}</p><p>{{entry.created_at | date:'medium'}} · Recorded by {{entry.recorded_by}}</p></article>} @empty {<p>No outcome has been recorded. This does not establish that the resident is accounted for.</p>}</div><h3>Evacuation assignment history</h3><div class="household-member-list">@for(entry of details.history;track entry.assignment_id){<article><h4>{{entry.action}}</h4><p>{{entry.action === 'Returned Home' ? 'Returned home' : (entry.shelter_name || 'Center no longer available')}}</p><p>{{entry.evacuation_at | date:'medium'}} · Recorded by {{entry.recorded_by || 'Unavailable'}}</p></article>} @empty {<p>No evacuation assignments recorded yet.</p>}</div>
     <div class="household-details-actions"><button type="button" class="secondary" (click)="residentProfileDialog.close()">Close</button><button type="button" class="primary" (click)="editProfile(residentProfileDialog)">Edit resident</button></div>
   }
 </dialog>

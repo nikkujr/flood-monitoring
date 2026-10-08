@@ -246,6 +246,7 @@ CREATE TABLE IF NOT EXISTS volunteers (
   contact_number VARCHAR(30) NOT NULL,
   email VARCHAR(190) NULL,
   assigned_zone_id CHAR(36) NULL,
+  responder_type ENUM('Volunteer','Barangay Tanod') NOT NULL DEFAULT 'Volunteer',
   availability_status ENUM('Available','Assigned','Unavailable') NOT NULL DEFAULT 'Available',
   notes TEXT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -327,4 +328,83 @@ CREATE TABLE IF NOT EXISTS flood_report_reviews (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   FOREIGN KEY (report_id) REFERENCES flood_reports(report_id) ON DELETE CASCADE,
   FOREIGN KEY (reviewer_user_id) REFERENCES users(user_id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS rescue_teams (
+  team_id CHAR(36) PRIMARY KEY,
+  name VARCHAR(120) NOT NULL UNIQUE,
+  leader VARCHAR(120) NOT NULL,
+  leader_id CHAR(36) NULL,
+  contact VARCHAR(80) NOT NULL,
+  vehicle VARCHAR(120) NULL UNIQUE,
+  passenger_capacity INT NOT NULL,
+  availability ENUM('Available','Out of service') NOT NULL DEFAULT 'Available',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS rescue_missions (
+  mission_id CHAR(36) PRIMARY KEY,
+  team_id CHAR(36) NOT NULL,
+  shelter_id CHAR(36) NOT NULL,
+  pickup VARCHAR(500) NOT NULL,
+  instructions VARCHAR(1000) NOT NULL,
+  status ENUM('Dispatched','At pickup','Transporting','Blocked','Arrived','Cancelled') NOT NULL,
+  revision INT NOT NULL DEFAULT 1,
+  residents JSON NOT NULL,
+  team_snapshot JSON NOT NULL,
+  shelter_name VARCHAR(160) NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  arrived_at DATETIME(3) NULL,
+  INDEX rescue_team_status (team_id,status),
+  FOREIGN KEY (team_id) REFERENCES rescue_teams(team_id)
+);
+CREATE TABLE IF NOT EXISTS rescue_active_residents (
+  resident_id CHAR(36) PRIMARY KEY,
+  mission_id CHAR(36) NOT NULL,
+  INDEX rescue_active_mission (mission_id),
+  FOREIGN KEY (mission_id) REFERENCES rescue_missions(mission_id)
+);
+CREATE TABLE IF NOT EXISTS rescue_updates (
+  update_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  mission_id CHAR(36) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  note VARCHAR(1000) NOT NULL,
+  recorded_by_user_id CHAR(36) NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  FOREIGN KEY (mission_id) REFERENCES rescue_missions(mission_id)
+);
+
+CREATE TABLE IF NOT EXISTS rescue_team_members (
+  team_id CHAR(36) NOT NULL,
+  volunteer_id CHAR(36) NOT NULL,
+  PRIMARY KEY(team_id,volunteer_id),
+  FOREIGN KEY(team_id) REFERENCES rescue_teams(team_id),
+  FOREIGN KEY(volunteer_id) REFERENCES volunteers(volunteer_id)
+);
+CREATE TABLE IF NOT EXISTS rescue_active_responders (
+  volunteer_id CHAR(36) PRIMARY KEY,
+  mission_id CHAR(36) NOT NULL,
+  FOREIGN KEY(volunteer_id) REFERENCES volunteers(volunteer_id),
+  FOREIGN KEY(mission_id) REFERENCES rescue_missions(mission_id)
+);
+CREATE TABLE IF NOT EXISTS resident_outcomes (
+  resident_id CHAR(36) PRIMARY KEY,
+  outcome ENUM('Missing','Deceased','Located') NOT NULL,
+  revision INT NOT NULL,
+  source VARCHAR(240) NOT NULL,
+  notes VARCHAR(1000) NOT NULL,
+  last_seen_location VARCHAR(500) NOT NULL,
+  observed_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS resident_outcome_updates (
+  update_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  resident_id CHAR(36) NOT NULL,
+  resident_name VARCHAR(160) NOT NULL,
+  outcome VARCHAR(30) NOT NULL,
+  source VARCHAR(240) NOT NULL,
+  notes VARCHAR(1000) NOT NULL,
+  last_seen_location VARCHAR(500) NOT NULL,
+  observed_at DATETIME NOT NULL,
+  recorded_by_user_id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

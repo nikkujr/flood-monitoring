@@ -3,6 +3,7 @@ import { Injectable, signal } from '@angular/core';
 import { tap } from 'rxjs';
 import { environment } from '../environments/environment';
 import type { DssData } from './dss.models';
+import type {RescueBoard} from './rescue.models';
 
 export interface SessionUser {
   userId: string;
@@ -15,7 +16,7 @@ export interface SessionUser {
 export interface ZoneStatusPreview {
   zone: string; risk: string; revision: string; eligibleCount: number; evacuatedCount: number; inactiveCount: number;
   statusCounts: Record<string, number>;
-  residents: { id: string; name: string; household: string; status: string; recordStatus: string }[];
+  residents: { id: string; name: string; household: string; status: string; outcome?:string|null; recordStatus: string }[];
 }
 export interface ReportReview {
   review_id:number; from_status:string; to_status:string; severity_level:string; notes:string;
@@ -26,7 +27,7 @@ export interface HouseholdDetails {
   household:{household_id:string;household_number:string;head_of_household_name:string;address_line:string;contact_number:string;verification_status:string;updated_at:string;zone_name:string};
   members:{id:string;name:string;relationship:string;status:string;recordStatus:string;priority:string;vulnerabilities:string[];assistance:string[];shelter:string|null;updatedAt:string;flags:string[];needsAssistance:boolean}[];
 }
-export interface ResidentDetails {resident:Record<string,any>;vulnerabilities:string[];flags:string[];needsAssistance:boolean;history:{assignment_id:string;action:string;evacuation_at:string;created_at:string;shelter_name:string|null;recorded_by:string|null}[]}
+export interface ResidentDetails {resident:Record<string,any>;vulnerabilities:string[];flags:string[];needsAssistance:boolean;outcomeHistory?:{outcome:string;source:string;notes:string;last_seen_location:string;observed_at:string;created_at:string;recorded_by:string}[];history:{assignment_id:string;action:string;evacuation_at:string;created_at:string;shelter_name:string|null;recorded_by:string|null}[]}
 
 export interface WeatherData {
   location: string;
@@ -59,6 +60,13 @@ export interface ResidentYearSummary {
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
+  rescueBoard(){return this.http.get<RescueBoard>(`${this.baseUrl}/rescue`);}
+  addRescueTeam(input:{name:string;leaderId:string;memberIds:string[];vehicle:string;passengerCapacity:number}){return this.http.post<{message:string}>(`${this.baseUrl}/rescue/teams`,input);}
+  editRescueTeam(id:string,input:{name:string;leaderId:string;memberIds:string[];vehicle:string;passengerCapacity:number}){return this.http.put<{message:string}>(`${this.baseUrl}/rescue/teams/${id}`,input);}
+  recordResidentOutcome(id:string,input:{outcome:string;revision:number;source:string;notes:string;lastSeenLocation:string;observedAt:string;confirmed:boolean}){return this.http.post<{message:string}>(`${this.baseUrl}/rescue/outcomes/${id}`,input);}
+  setRescueTeamAvailability(id:string,availability:string){return this.http.put<{message:string}>(`${this.baseUrl}/rescue/teams/${id}/availability`,{availability});}
+  dispatchRescue(input:{teamId:string;shelterId:string;residentIds:string[];pickup:string;instructions:string;expectedStatuses:Record<string,string>}){return this.http.post<{message:string}>(`${this.baseUrl}/rescue/missions`,input);}
+  updateRescue(id:string,input:{status:string;revision:number;note:string;confirmedArrival:boolean;arrivalResidentIds?:string[]}){return this.http.post<{message:string}>(`${this.baseUrl}/rescue/missions/${id}/status`,input);}
   private readonly baseUrl = environment.apiBaseUrl;
   readonly accessToken = signal<string | null>(null);
   readonly user = signal<SessionUser | null>(null);

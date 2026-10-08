@@ -30,7 +30,12 @@ try {
   assert.equal(preview.residents[0]!.household, `Check ${householdId}`);
   assert.equal(preview.residents[3]!.status, 'Evacuated');
   assert.equal(preview.residents[4]!.recordStatus, 'Inactive');
-  assert.deepEqual(Object.keys(preview.residents[0]!).sort(), ['household', 'id', 'name', 'recordStatus', 'status'], 'Preview exposes only fields needed for resident review');
+  assert.deepEqual(Object.keys(preview.residents[0]!).sort(), ['household', 'id', 'name', 'outcome', 'recordStatus', 'status'], 'Preview exposes only fields needed for resident review');
+  for(const [i,outcome] of ['Missing','Deceased'].entries())await connection.query('INSERT INTO resident_outcomes(resident_id,outcome,revision,source,notes,last_seen_location,observed_at) VALUES(?,?,1,?,?,?,NOW())',[ids[i],outcome,'Test source','Test details','Test location']);
+  const withOutcomes=await criticalZoneStatus(connection,zoneId);
+  assert.equal(withOutcomes.eligibleCount,1,'Missing/deceased residents must be excluded from bulk marking');
+  await assert.rejects(criticalZoneStatus(connection,zoneId,{status:'For Evacuation',revision:withOutcomes.revision,residentIds:[ids[0]!]}),/Select active/);
+  await connection.query('DELETE FROM resident_outcomes WHERE resident_id IN (?)',[ids.slice(0,2)]);
   const snapshot = async () => (await connection.query<any[]>('SELECT resident_id,evacuation_status FROM residents WHERE resident_id IN (?) ORDER BY resident_id', [ids]))[0];
   for (const status of ['For Evacuation', 'For Monitoring', 'Safe'] as const) {
     const current = await criticalZoneStatus(connection, zoneId);
