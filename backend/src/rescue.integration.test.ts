@@ -8,6 +8,7 @@ import {missionTransitions} from './rescue.js';
 assert.ok(['localhost','127.0.0.1'].includes(new URL(config.databaseUrl).hostname),'Use the local development database only.');
 const zone=randomUUID(),household=randomUUID(),shelter=randomUUID(),people=[randomUUID(),randomUUID(),randomUUID()];
 const responders=[randomUUID(),randomUUID(),randomUUID()];
+const assistanceId=randomUUID();
 const label=`Rescue verification ${zone}`;const teamIds:string[]=[];
 try{
   const [admins]=await db.query<any[]>("SELECT user_id,username,role,credential_version FROM users WHERE is_active=1 AND must_change_password=0 AND role='Super Admin' LIMIT 1");assert.ok(admins[0]);const admin=admins[0];
@@ -35,6 +36,14 @@ try{
   await request('rescue/missions','POST',dispatch(people),409);
   await request('rescue/missions','POST',dispatch(people.slice(0,2),teams[1].team_id),409);
   await request('rescue/missions','POST',{...dispatch(people.slice(0,2)),expectedStatuses:{}},409);
+  await db.execute("INSERT INTO assistance_requests(request_id,resident_id,household_id,submitted_by_user_id,kind,location,needs) VALUES(?,?,?,?,'Need help','Test pickup only','Test rescue assistance')",[assistanceId,people[2],household,admin.user_id]);
+  const assistanceRequest={requestId:assistanceId,revision:0,confirmed:true};
+  await request('rescue/missions','POST',{...dispatch([people[2]!]),assistanceRequest:{...assistanceRequest,confirmed:false}},400);
+  await request('rescue/missions','POST',{...dispatch([people[2]!]),assistanceRequest:{...assistanceRequest,revision:1}},409);
+  await request('rescue/missions','POST',{...dispatch([people[0]!]),assistanceRequest},400);
+  await db.execute("UPDATE assistance_requests SET status='Closed' WHERE request_id=?",[assistanceId]);
+  await request('rescue/missions','POST',{...dispatch([people[2]!]),assistanceRequest},409);
+  await db.execute("UPDATE assistance_requests SET status='Submitted' WHERE request_id=?",[assistanceId]);
   const id=(await request('rescue/missions','POST',dispatch(people.slice(0,2)),201)).missionId;
   await request(`volunteers/${responders[0]}`,'DELETE',undefined,409);
   assert.equal((await board()).teams.find((t:any)=>t.team_id===teams[0].team_id).active_mission_id,id);
@@ -87,7 +96,9 @@ try{
   const footTeams=(await board()).teams.filter((t:any)=>t.name.includes(`${label} foot`));assert.equal(footTeams.length,2);assert.ok(footTeams.every((t:any)=>t.vehicle===null&&t.passenger_capacity===0));
   await request(`rescue/teams/${footTeams[1].team_id}`,'PUT',{name:footTeams[1].name,leaderId:responders[0],memberIds:responders.slice(0,2),vehicle:'',passengerCapacity:99});
   assert.equal((await board()).teams.find((t:any)=>t.team_id===footTeams[1].team_id).passenger_capacity,0);
-  const footId=(await request('rescue/missions','POST',dispatch([people[2]!],footTeams[0].team_id),201)).missionId;
+  const footId=(await request('rescue/missions','POST',{...dispatch([people[2]!],footTeams[0].team_id),assistanceRequest},201)).missionId;
+  const [[reviewedHelp]]=await db.query<any[]>('SELECT status,revision,review_note FROM assistance_requests WHERE request_id=?',[assistanceId]);assert.equal(reviewedHelp.status,'Acknowledged');assert.equal(reviewedHelp.revision,1);assert.ok(reviewedHelp.review_note.includes(footId));
+  const [[helpAudit]]=await db.query<any[]>('SELECT recorded_by_user_id FROM assistance_request_updates WHERE request_id=?',[assistanceId]);assert.equal(helpAudit.recorded_by_user_id,admin.user_id);
   assert.equal((await mission(footId)).team_snapshot.vehicle,null);
   await request('rescue/missions','POST',dispatch([people[2]!],footTeams[1].team_id),409);
   await update('At pickup',{},200,footId);await update('Transporting',{},200,footId);
@@ -118,6 +129,8 @@ try{
   const [afterOutcome]=await db.query<any[]>('SELECT current_occupancy FROM shelters WHERE shelter_id=?',[shelter]);assert.equal(afterOutcome[0].current_occupancy,0);
   console.log('PASS: rescue transitions, no-vehicle teams, concurrency, capacity, mixed arrival/outcome safeguards, historical arrival snapshots, and occupancy after later outcomes.');
 }finally{
+  await db.execute('DELETE FROM assistance_request_updates WHERE request_id=?',[assistanceId]);
+  await db.execute('DELETE FROM assistance_requests WHERE request_id=?',[assistanceId]);
   const [missions]=await db.query<any[]>('SELECT mission_id FROM rescue_missions WHERE shelter_id=?',[shelter]);
   if(missions.length){const ids=missions.map(m=>m.mission_id);await db.query('DELETE FROM rescue_active_responders WHERE mission_id IN (?)',[ids]);await db.query('DELETE FROM rescue_updates WHERE mission_id IN (?)',[ids]);await db.query('DELETE FROM rescue_active_residents WHERE mission_id IN (?)',[ids]);await db.query('DELETE FROM rescue_missions WHERE mission_id IN (?)',[ids]);}
   await db.query('DELETE FROM rescue_team_members WHERE volunteer_id IN (?)',[responders]);

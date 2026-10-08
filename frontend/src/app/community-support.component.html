@@ -1,0 +1,89 @@
+<section aria-label="Resident assistance and household contacts">
+  @if(resident){
+    <h2>Check in or request help</h2>
+    <p>Tell barangay staff where you are and what assistance you need. Staff must verify check-ins before changing evacuation records. Submitting a request does not confirm that a team has been sent.</p>
+    <form (submit)="submit($event)">
+      <fieldset [disabled]="saving">
+        <legend>Your current situation</legend>
+        <label>Situation<select name="kind" [(ngModel)]="checkIn.kind"><option>Need help</option><option>Safe at home</option><option>Reached shelter</option></select></label>
+        <label>Current location or shelter<input name="location" [(ngModel)]="checkIn.location" required minlength="5" maxlength="500" placeholder="Address, landmark, or shelter name" /></label>
+        <label>{{checkIn.kind==='Need help'?'Assistance needed':'Details (optional)'}}<textarea name="needs" [(ngModel)]="checkIn.needs" [required]="checkIn.kind==='Need help'" maxlength="1000" placeholder="Describe access difficulties, mobility needs, or other relevant details"></textarea></label>
+        <button class="primary" type="submit">{{saving?'Submitting…':'Submit check-in'}}</button>
+      </fieldset>
+    </form>
+    <h3>Your latest check-ins</h3>
+  }@else{
+    <div class="heading"><div><h1>Resident assistance & contacts</h1><p>Review self-reported needs and track which households still need to be contacted.</p></div><button class="secondary" type="button" (click)="planner.emit()">Open evacuation planner</button></div>
+    <nav aria-label="Assistance workspace"><button type="button" [attr.aria-pressed]="tab==='requests'" (click)="switchTab('requests')">Resident check-ins</button><button type="button" [attr.aria-pressed]="tab==='households'" (click)="switchTab('households')">Household contacts</button></nav>
+    <form class="filters" (submit)="$event.preventDefault();filter()">
+      <label>Search<input name="search" [(ngModel)]="search" maxlength="160" [placeholder]="tab==='requests'?'Resident, household, or location':'Household, head, or zone'" /></label>
+      <label>Status<select name="status" [(ngModel)]="status" (ngModelChange)="filter()"><option value="">All statuses</option>@if(tab==='requests'){<option>Submitted</option><option>Acknowledged</option><option>Closed</option>}@else{<option>Not contacted</option><option>Contacted</option><option>Needs follow-up</option>}</select></label>
+      <button class="secondary" type="submit">Search</button>
+    </form>
+    @if(tab==='households'){<p>Verified households with active residents. Contact status records staff outreach; it does not confirm anyone is safe. Priority flags use recorded High priority or age under 18 / 60 and above.</p>}
+  }
+  @if(error&&!selected){<p class="error" role="alert">{{error}}</p>}
+  @if(success){<p class="success" role="status">{{success}}</p>}
+  <div class="heading"><p role="status">{{loading?'Loading…':resident?'Showing your latest 20 check-ins':total+' records'}}</p><button class="secondary" type="button" (click)="load()" [disabled]="loading">Refresh</button></div>
+  <div class="cards" [attr.aria-busy]="loading">
+    @for(row of items;track row['request_id']||row['household_id']){
+      <article>
+        @if(resident||tab==='requests'){
+          <h3>{{row['kind']}} @if(!resident){· {{row['full_name']}}}</h3>
+          <p><b>{{row['status']}}</b> · {{row['created_at']|date:'medium'}}</p>
+          @if(!resident){<p>{{row['household_number']}} · {{row['zone_name']}} · {{row['contact_number']||'No resident contact number'}}</p>}
+          <p>{{row['location']}}</p><p>{{row['needs']}}</p>
+          @if(row['review_note']){<p><b>Staff response:</b> {{row['review_note']}}</p>}
+          @if(!resident){
+            @if(row['outcome']){<p><b>Recorded outcome:</b> {{row['outcome']}}</p>}
+            @if(row['mission_id']){<p>Rescue team already assigned. Review the mission in the planner.</p>}
+            @if(row['record_status']==='Inactive'){<p>Resident registry record is inactive.</p>}
+            <button class="secondary" type="button" (click)="open(row)">{{row['status']==='Closed'?'View review history':'Review check-in'}}</button>
+          }
+        }@else{
+          <h3>{{row['household_number']}} · {{row['head_of_household_name']}}</h3>
+          <p>{{row['zone_name']}} · {{row['address_line']}}</p><p>{{row['contact_number']||'No household contact number'}}</p>
+          <p><b>{{row['status']}}</b> · {{row['assigned_name']||'Unassigned'}}</p>
+          <p>{{row['open_requests']}} open requests for help · {{row['priority_members']}} members with priority flags</p>
+          @if(row['note']){<p>{{row['note']}} · {{row['updated_at']|date:'medium'}}</p>}
+          <button class="secondary" type="button" (click)="open(row)">Record contact / assign staff</button>
+        }
+      </article>
+    }@empty{ @if(!loading){<p>No {{resident?'check-ins yet':'matching records'}}.</p>} }
+  </div>
+  @if(!resident&&pages>0){<div class="heading"><button class="secondary" type="button" [disabled]="page<=1||loading" (click)="page=page-1;load()">Previous</button><span>Page {{page}} of {{pages}}</span><button class="secondary" type="button" [disabled]="page>=pages||loading" (click)="page=page+1;load()">Next</button></div>}
+</section>
+<dialog #reviewDialog (cancel)="saving?$event.preventDefault():close()" aria-labelledby="support-review-title">
+  @if(selected;as row){
+    <div class="heading"><h2 id="support-review-title">{{tab==='requests'?row['full_name']:row['household_number']}}</h2><button type="button" class="secondary" [disabled]="saving" (click)="close()">Close</button></div>
+    <p>{{tab==='requests'?row['kind']+' · '+row['location']:row['head_of_household_name']+' · '+row['address_line']}}</p>
+    @if(tab==='requests'){<p>{{row['needs']}}</p><p>Verify the resident's situation before sending a rescue team or recording a resolution.</p>}
+    @if(error){<p class="error" role="alert">{{error}}</p>}
+    @if(canRescue(row)){
+      <fieldset [disabled]="saving"><legend>Rescue this resident</legend>
+        <label>Search destinations<input type="search" name="shelterSearch" [(ngModel)]="shelterSearch" maxlength="160" /></label><button type="button" class="secondary" (click)="loadShelters()" [disabled]="sheltersLoading">Search</button>
+        <label>Destination<select name="rescueDestination" [(ngModel)]="shelterId" [disabled]="sheltersLoading"><option value="">Choose an available evacuation center</option>@for(shelter of shelters;track shelter['shelter_id']){<option [value]="shelter['shelter_id']">{{shelter['shelter_name']}} · {{shelter['location_text']}}</option>}</select></label>
+        @if(sheltersLoading){<p role="status">Loading destinations…</p>}
+        @if(shelterPages>1){<div class="heading"><button type="button" class="secondary" [disabled]="sheltersLoading||shelterPage<=1" (click)="loadShelters(shelterPage-1)">Previous</button><span>Page {{shelterPage}} of {{shelterPages}}</span><button type="button" class="secondary" [disabled]="sheltersLoading||shelterPage>=shelterPages" (click)="loadShelters(shelterPage+1)">Next</button></div>}
+        <label class="check"><input type="checkbox" name="rescueConfirmed" [(ngModel)]="rescueConfirmed" />I verified the resident's situation and confirmed they need rescue.</label>
+        <button type="button" class="primary" (click)="prepareRescue()" [disabled]="!rescueConfirmed||!shelterId||sheltersLoading||!rescue">Choose and dispatch rescue team</button>
+        <p>The next step checks team availability and route suitability. Dispatch keeps the assistance request open until its need is resolved.</p>
+      </fieldset>
+    }
+    @if(tab==='households'||row['status']!=='Closed'){
+      <form (submit)="save($event)"><fieldset [disabled]="saving">
+        <legend>{{tab==='requests'?'Record review':'Record household outreach'}}</legend>
+        <label>Status<select name="reviewStatus" [(ngModel)]="review.status">@if(tab==='requests'){<option>Acknowledged</option><option>Closed</option>}@else{<option>Not contacted</option><option>Contacted</option><option>Needs follow-up</option>}</select></label>
+        @if(tab==='households'){<label>Assigned staff<select name="assignedUserId" [(ngModel)]="review.assignedUserId"><option value="">Unassigned</option>@for(person of staffMembers;track person.user_id){<option [value]="person.user_id">{{person.full_name}}</option>}</select></label>}
+        <label>{{tab==='requests'?'Review / resolution notes':'Contact method, result, and next step'}}<textarea name="reviewNote" [(ngModel)]="review.note" required maxlength="1000"></textarea></label>
+        @if(tab==='requests'){<label class="check"><input name="confirmed" type="checkbox" [(ngModel)]="review.confirmed" required />I verified this update; closing a request for help means its assistance need has been addressed.</label>}
+        <button class="primary" type="submit" [disabled]="!review.note.trim()||(tab==='requests'&&!review.confirmed)">{{saving?'Saving…':'Save update'}}</button>
+      </fieldset></form>
+    }
+    <h3>Update history</h3>
+    @if(historyLoading){<p role="status">Loading history…</p>}
+    @if(historyError){<p role="alert">{{historyError}}</p>}
+    @for(update of history;track update['update_id']){<article><p><b>{{update['status']}}</b> · {{update['recorded_by']}} · {{update['created_at']|date:'medium'}}</p>@if(tab==='households'){<p>Assigned to {{update['assigned_name']||'Unassigned'}}</p>}<p>{{update['note']}}</p></article>}@empty{@if(!historyLoading&&!historyError){<p>No staff updates recorded.</p>}}
+  }
+</dialog>
+@if(!resident){@defer (when rescueOpen){<details open><summary>Rescue missions</summary><app-rescue #rescueWorkspace (dispatched)="load()" (changed)="load()" (navigate)="planner.emit()"></app-rescue></details>}}

@@ -17,7 +17,7 @@ const emptyFilters = (): Record<string,string> => ({
 export class DssComponent implements OnInit, OnDestroy {
   @Output() navigate = new EventEmitter<{ page: string; resource?: string; filters?: Record<string, string> }>();
   @Input() initialTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology' = 'reports';
-  @Input() mode: 'dss'|'statistics' = 'dss';
+  @Input() mode: 'dss'|'statistics'|'planner'|'assistance' = 'dss';
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly refresh = new BehaviorSubject(0);
@@ -163,7 +163,7 @@ export class DssComponent implements OnInit, OnDestroy {
   readonly geoAnalyticsChart = 'conic-gradient(#e5e7eb 0 72%, #d9c8ff 72% 87.4%, #a946ed 87.4% 94.4%, #5d16e8 94.4% 100%)';
   pages: Record<string,number> = {vulnerable:1,evacuation:1,households:1};
   ngOnInit() {
-    this.activeTab = this.mode === 'dss' ? 'overview' : this.initialTab;
+    this.activeTab = this.mode === 'planner' ? 'planner' : this.mode === 'assistance' ? 'evacuation' : this.mode === 'dss' ? 'overview' : this.initialTab;
     this.subscription = combineLatest([timer(0,30_000),this.refresh]).pipe(switchMap(()=>{
       if (this.filters['from'] && this.filters['to'] && this.filters['from']>this.filters['to']) {
         this.loading=false;this.error='Start date must not be after end date.';return of(null);
@@ -181,7 +181,10 @@ export class DssComponent implements OnInit, OnDestroy {
       }
       this.cdr.markForCheck();
     });
+    if (this.mode === 'planner') this.refreshPlan();
   }
+  get pageTitle() { return {dss:'Decision Support System',statistics:'Reports & Statistics',planner:'Evacuation Planner',assistance:'Assistance and Shelters'}[this.mode]; }
+  get priorityZones() { return [...(this.data?.zones ?? [])].sort((a,b)=>this.risks.indexOf(b.risk)-this.risks.indexOf(a.risk)||a.name.localeCompare(b.name,undefined,{numeric:true})); }
   ngOnDestroy() { this.subscription?.unsubscribe();this.refresh.complete(); }
   openBulkStatus(zone: DssData['zones'][number], dialog: HTMLDialogElement, viewOnly = false) {
     this.bulkPreviewSubscription?.unsubscribe();

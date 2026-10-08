@@ -7,19 +7,20 @@ import { LiveMapComponent } from './live-map.component';
 import { PolygonEditorComponent } from './polygon-editor.component';
 import { LocationPickerComponent } from './location-picker.component';
 import { DssComponent } from './dss.component';
+import { CommunitySupportComponent } from './community-support.component';
 import { dashboardCount, editorFieldSections, shortRecordId, findTasks, recordedResidentOutcome } from './admin-ui';
 import type { ResponseView } from './rescue.models';
 import type { DssData } from './dss.models';
 import {draftKey,draftValues,readDraft,writeDraft,removeDraft,type FormDraft} from './form-draft';
 
-type PageId = 'dashboard' | 'map' | 'reports' | 'residents' | 'households' | 'evacuation' | 'statistics' | 'dss' | 'notifications' | 'users';
-type PublicPage = 'home' | 'map' | 'report' | 'login';
+type PageId = 'dashboard' | 'map' | 'reports' | 'residents' | 'households' | 'evacuation' | 'statistics' | 'dss' | 'notifications' | 'users' | 'planner' | 'assistance' | 'registrations' | 'contacts';
+type PublicPage = 'home' | 'map' | 'report' | 'login' | 'account' | 'register';
 type NavigationTask = { page: PageId; label: string; description: string; keywords?: string; resource?: string; responseView?: ResponseView };
 type EditorOption = { value: string; label: string };
 type EditorField = {
   name: string;
   label: string;
-  type?: 'text' | 'tel' | 'email' | 'password' | 'number' | 'date' | 'color' | 'textarea' | 'select' | 'multiselect' | 'polygon' | 'location' | 'household-lookup';
+  type?: 'text' | 'tel' | 'email' | 'password' | 'number' | 'date' | 'color' | 'textarea' | 'select' | 'multiselect' | 'polygon' | 'location' | 'household-lookup' | 'resident-lookup';
   required?: boolean;
   placeholder?: string;
   options?: EditorOption[];
@@ -39,7 +40,7 @@ function validPhilippineContactNumber(value: unknown) {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [FormsModule, DatePipe, LiveMapComponent, PolygonEditorComponent, LocationPickerComponent, DssComponent],
+  imports: [FormsModule, DatePipe, LiveMapComponent, PolygonEditorComponent, LocationPickerComponent, DssComponent, CommunitySupportComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -53,10 +54,10 @@ export class App implements OnInit, OnDestroy {
   @ViewChild(DssComponent) private dssWorkspace?: DssComponent;
   get navigationTasks() {
     const tasks: NavigationTask[] = [
-      {page:'dss',label:'Plan evacuation & rescue',description:'Select residents and send a rescue team.',keywords:'dispatch evacuation priority mission',responseView:'residents'},
-      {page:'dss',label:'Update rescue missions',description:'Track progress and confirm arrival.',keywords:'rescue escort pickup transport',responseView:'missions'},
-      {page:'dss',label:'Set up rescue teams',description:'Assign volunteers and barangay tanods to crews.',keywords:'leader vehicle foot responder',responseView:'teams'},
-      {page:'dss',label:'Missing & deceased residents',description:'Record outcomes and follow up missing residents.',keywords:'casualty casualties located death',responseView:'outcomes'},
+      {page:'planner',label:'Plan evacuation & rescue',description:'Select residents and send a rescue team.',keywords:'dispatch evacuation priority mission',responseView:'residents'},
+      {page:'planner',label:'Update rescue missions',description:'Track progress and confirm arrival.',keywords:'rescue escort pickup transport',responseView:'missions'},
+      {page:'planner',label:'Set up rescue teams',description:'Assign volunteers and barangay tanods to crews.',keywords:'leader vehicle foot responder',responseView:'teams'},
+      {page:'planner',label:'Missing & deceased residents',description:'Record outcomes and follow up missing residents.',keywords:'casualty casualties located death',responseView:'outcomes'},
       {page:'evacuation',label:'Volunteers & tanods',description:'Maintain responder contacts and availability.',keywords:'rescue crew staff',resource:'volunteers'},
       {page:'notifications',label:'Emergency hotlines',description:'Maintain public emergency contact numbers.',keywords:'phone contact help',resource:'emergency-contacts'},
       ...this.navItems.map(item=>({page:item.id,label:item.label,description:this.pageDetails[item.id].description}))
@@ -139,7 +140,7 @@ export class App implements OnInit, OnDestroy {
     if (!this.residentImportCsv || (!preview && (!this.residentImportCount || this.residentImportBusy))) return;
     this.residentImportBusy = true;
     this.residentImportError = '';
-    this.api.create<{ count: number; message: string }>('residents/import', { csv: this.residentImportCsv, preview }).pipe(finalize(() => {
+    this.api.create<{ count: number; message: string }>('residents/import', { csv: this.residentImportCsv, preview, year: this.selectedResidentYear }).pipe(finalize(() => {
       this.residentImportBusy = false;
       this.changeDetector.detectChanges();
     })).subscribe({
@@ -157,6 +158,192 @@ export class App implements OnInit, OnDestroy {
     });
   }
   publicPage: PublicPage = 'home';
+  readonly registrationToday = new Date().toLocaleDateString('en-CA');
+  registrations: Record<string, any>[] = [];
+  registrationStatus = 'Pending';
+  registrationPage = 1;
+  registrationPages = 0;
+  registrationLoading = false;
+  registrationError = '';
+  registrationReview?: Record<string, any>;
+  registrationReviewError = '';
+  registrationReviewBusy = false;
+  registrationAddResident = false;
+  registrationResident: Record<string,string> = {};
+  registrationHouseholds: Record<string,any>[] = [];
+  registrationHouseholdQuery = '';
+  registrationHouseholdPage = 1;
+  registrationHouseholdPages = 0;
+  registrationHouseholdLoading = false;
+  registrationHouseholdError = '';
+
+  setRegistrationResidentMode(add: boolean) {
+    this.registrationAddResident = add;
+    if (add) this.loadRegistrationHouseholds();
+  }
+
+  loadRegistrationHouseholds(page = 1) {
+    if (this.registrationHouseholdLoading) return;
+    this.registrationResident['householdId'] = '';
+    this.registrationHouseholdLoading = true;this.registrationHouseholdError = '';this.registrationHouseholdPage = page;
+    this.api.list<Record<string,any>>('resident-registrations/households',page,20,this.registrationHouseholdQuery.trim(),'h.household_number','asc').pipe(finalize(() => {this.registrationHouseholdLoading = false;this.changeDetector.detectChanges();})).subscribe({
+      next: result => {this.registrationHouseholds = result.items;this.registrationHouseholdPages = result.totalPages;},
+      error: error => {this.registrationHouseholds = [];this.registrationHouseholdError = error?.error?.message ?? 'Households could not be loaded.';}
+    });
+  }
+
+  registerResident(event: Event) {
+    event.preventDefault(); if (this.loginLoading) return;
+    this.fieldErrors = {}; this.errorMessage = '';
+    const form = event.currentTarget as HTMLFormElement;
+    const values = Object.fromEntries(new FormData(form).entries());
+    if (values['password'] !== values['confirmation']) {this.fieldErrors['confirmation'] = 'Passwords do not match.'; return;}
+    delete values['confirmation'];
+    this.loginLoading = true;
+    this.api.register(values).pipe(finalize(() => this.finishLoginLoading())).subscribe({
+      next: result => {form.reset();this.navigatePublic('login');this.successMessage = result.message;},
+      error: error => {this.fieldErrors = error?.error?.fieldErrors ?? {}; this.errorMessage = error?.error?.message ?? 'Registration could not be completed.';}
+    });
+  }
+
+  loadRegistrations(page = 1) {
+    this.registrationPage = page; this.registrationLoading = true; this.registrationError = '';
+    this.api.list<Record<string, any>>('resident-registrations',page,20,'','s.created_at','asc',{status:this.registrationStatus}).pipe(finalize(() => {this.registrationLoading = false; this.changeDetector.detectChanges();})).subscribe({
+      next: result => {this.registrations = result.items; this.registrationPages = result.totalPages;},
+      error: error => this.registrationError = error?.error?.message ?? 'Registrations could not be loaded.'
+    });
+  }
+
+  openRegistrationReview(registration: Record<string, any>, dialog: HTMLDialogElement) {
+    this.registrationReview = registration; this.registrationReviewError = ''; this.editorValues = {}; this.selectedAccountResident = undefined;
+    this.registrationAddResident = false;this.registrationHouseholdQuery = '';this.registrationHouseholds = [];
+    this.registrationResident = {householdId:'',fullName:registration['full_name'],dateOfBirth:registration['date_of_birth'],contactNumber:registration['contact_number'],addressLine:registration['address_line'],sex:'',priorityLevel:''};
+    dialog.querySelector<HTMLFormElement>('form')?.reset();
+    dialog.showModal();
+  }
+
+  reviewRegistration(status: 'Approved' | 'Rejected', notes: string, confirmed: boolean, dialog: HTMLDialogElement) {
+    if (!this.registrationReview || this.registrationReviewBusy) return;
+    this.registrationReviewError = '';
+    const residentId = this.editorValue('residentId');
+    const newResident = status === 'Approved' && this.registrationAddResident ? {...this.registrationResident} : undefined;
+    if (status === 'Approved' && ((!newResident && !residentId) || !confirmed)) {this.registrationReviewError = 'Select or add the resident and confirm identity and household validation.'; return;}
+    if (newResident && ['householdId','fullName','dateOfBirth','sex','addressLine','priorityLevel'].some(field => !newResident[field]?.trim())) {this.registrationReviewError = 'Complete the new resident details and select a verified household.'; return;}
+    if (status === 'Rejected' && notes.trim().length < 5) {this.registrationReviewError = 'Explain why the registration is rejected.'; return;}
+    this.registrationReviewBusy = true;
+    this.api.create<{message:string}>('resident-registrations/' + this.registrationReview['user_id'] + '/review',{status,residentId:newResident ? undefined : residentId || undefined,newResident,notes,confirmed}).pipe(finalize(() => {this.registrationReviewBusy = false; this.changeDetector.detectChanges();})).subscribe({
+      next: result => {dialog.close();this.successMessage = result.message;this.loadRegistrations(this.registrationPage);},
+      error: error => this.registrationReviewError = error?.error?.message ?? 'Review could not be saved.'
+    });
+  }
+  account: {resident: Record<string, any> | null; registration: Record<string, any> | null} | null = null;
+  accountLoading = false;
+  accountError = '';
+  readonly accountTabs = [{id:'profile',label:'My information'},{id:'household',label:'My household'},{id:'assistance',label:'Check-ins & help'},{id:'security',label:'Account security'}] as const;
+  accountTab: 'profile' | 'household' | 'assistance' | 'security' = 'profile';
+  accountTabKey(event: KeyboardEvent) {
+    const index=this.accountTabs.findIndex(tab => tab.id === this.accountTab);
+    const next=event.key === 'ArrowRight' ? (index+1)%4 : event.key === 'ArrowLeft' ? (index+3)%4 : event.key === 'Home' ? 0 : event.key === 'End' ? 3 : -1;
+    if(next<0) return;event.preventDefault();if(this.accountProfileBusy || this.loginLoading) return;
+    this.accountTab=this.accountTabs[next].id;document.getElementById('account-tab-'+this.accountTab)?.focus();
+  }
+  accountProfileEditing = false;
+  accountProfileBusy = false;
+  accountProfileError = '';
+  accountProfileSuccess = '';
+  accountProfile: Record<string,string> = {};
+  accountProfileFieldErrors: Record<string,string> = {};
+
+  editAccountProfile() {
+    const resident=this.account?.resident;if(!resident || this.accountProfileBusy) return;
+    this.accountTab = 'profile';
+    this.accountProfile = {fullName:resident['full_name'],dateOfBirth:resident['date_of_birth'],sex:resident['sex'],email:this.api.user()?.email ?? '',contactNumber:resident['contact_number'] ?? '',addressLine:resident['address_line'],emergencyContactName:resident['emergency_contact_name'] ?? '',emergencyContactNumber:resident['emergency_contact_number'] ?? '',occupation:resident['occupation'] ?? '',education:resident['education'] ?? '',maritalStatus:resident['marital_status'] ?? '',philsysNumber:resident['philsys_number'] ?? '',philhealthNumber:resident['philhealth_number'] ?? '',sanitaryToilet:resident['sanitary_toilet'] ?? '',houseType:resident['house_type'] ?? '',pwdSpecify:resident['pwd_specify'] ?? '',canSwim:resident['can_swim'] ?? '',soloParent:resident['solo_parent'] ?? ''};
+    this.accountProfileError = '';this.accountProfileSuccess = '';this.accountProfileFieldErrors = {};this.accountProfileEditing = true;
+  }
+
+  saveAccountProfile(event: Event) {
+    event.preventDefault();if(this.accountProfileBusy) return;
+    this.accountProfileError = '';this.accountProfileFieldErrors = {};
+    const form=event.currentTarget as HTMLFormElement;if(!form.reportValidity()) return;
+    const profile={...this.accountProfile};
+    this.accountProfileBusy = true;
+    this.api.update('auth','profile',profile).pipe(finalize(() => {this.accountProfileBusy = false;this.changeDetector.detectChanges();})).subscribe({
+      next: () => {
+        const user=this.api.user();if(user)this.api.user.set({...user,fullName:profile['fullName'].trim(),email:profile['email'].trim().toLowerCase()});
+        this.loadAccount();this.accountProfileSuccess = 'Your information has been updated.';
+      },
+      error: error => {this.accountProfileError = error?.error?.message ?? 'Your information could not be updated.';this.accountProfileFieldErrors = error?.error?.fieldErrors ?? {};}
+    });
+  }
+  private residentLoginPage: PublicPage = 'account';
+  residentLookupRows: Record<string, unknown>[] = [];
+  residentLookupQuery = '';
+  residentLookupPage = 1;
+  residentLookupPages = 0;
+  residentLookupTotal = 0;
+  residentLookupLoading = false;
+  residentLookupError = '';
+  selectedAccountResident?: Record<string, unknown>;
+
+  get selectedAccountResidentLabel() {
+    const id = this.editorValue('residentId');
+    if (!id) return '';
+    const resident = this.selectedAccountResident;
+    return resident?.['resident_id'] === id ? `${resident['full_name']} · ${resident['household_number']}` : `Resident ${shortRecordId(id)}`;
+  }
+
+  openResidentLookup(dialog: HTMLDialogElement) {
+    this.residentLookupQuery = ''; this.residentLookupPage = 1;
+    this.loadResidentLookup();
+    dialog.showModal();
+  }
+
+  loadResidentLookup(page = 1) {
+    if (this.residentLookupLoading) return;
+    this.residentLookupPage = page; this.residentLookupLoading = true;
+    this.residentLookupError = ''; this.residentLookupRows = [];
+    this.api.list<Record<string, unknown>>(this.activePage === 'registrations' ? 'resident-registrations/residents' : 'residents', page, 20, this.residentLookupQuery.trim(), 'r.full_name', 'asc').pipe(finalize(() => {
+      this.residentLookupLoading = false; this.changeDetector.detectChanges();
+    })).subscribe({
+      next: result => { this.residentLookupRows = result.items; this.residentLookupPages = result.totalPages; this.residentLookupTotal = result.totalItems; },
+      error: error => this.residentLookupError = error?.error?.message ?? 'Residents could not be loaded. Try again.'
+    });
+  }
+
+  selectAccountResident(resident: Record<string, unknown>, dialog: HTMLDialogElement) {
+    if (!this.canSelectAccountResident(resident)) return;
+    if (this.activePage === 'registrations') this.registrationAddResident = false;
+    this.selectedAccountResident = resident;
+    this.editorValues['residentId'] = String(resident['resident_id']);
+    delete this.fieldErrors['residentId'];
+    this.editorDirty = true;
+    this.changeDetector.detectChanges(); this.saveEditorDraft();
+    dialog.close();
+  }
+
+  canSelectAccountResident(resident: Record<string, unknown>) {
+    return resident['record_status'] === 'Active' && (this.activePage !== 'registrations' || (resident['verification_status'] === 'Verified' && (!resident['linked_user_id'] || resident['linked_user_id'] === this.registrationReview?.['user_id'])));
+  }
+
+  get isResident() { return this.api.user()?.role === 'Resident'; }
+  get canSubmitResidentReport() { return this.isResident && (!this.account?.registration || this.account.registration['status'] === 'Approved') && this.account?.resident?.['record_status'] === 'Active' && this.account?.resident?.['verification_status'] === 'Verified'; }
+
+  loadAccount() {
+    this.accountProfileEditing = false;this.accountProfile = {};this.accountProfileSuccess = '';this.accountProfileError = '';this.accountProfileFieldErrors = {};
+    this.account = null; this.accountLoading = true; this.accountError = '';
+    this.api.get<{resident: Record<string, any> | null;registration:Record<string,any>|null}>('auth', 'me').pipe(finalize(() => {this.accountLoading = false; this.changeDetector.detectChanges();})).subscribe({
+      next: account => this.account = account,
+      error: error => this.accountError = error?.error?.message ?? 'Your account information could not be loaded.'
+    });
+  }
+
+  private openSignedInPage(updateHistory = true) {
+    if (this.isResident) {
+      this.reloadPublicDraft();
+      this.navigatePublic(['home','map','report','account'].includes(this.publicPage) ? this.publicPage : this.residentLoginPage, !updateHistory);
+      if (this.publicPage === 'home' || this.publicPage === 'map') this.loadAccount();
+    } else this.setPage(this.api.user()?.role === 'Secretary' ? 'registrations' : this.requestedAdminPage ?? 'dashboard', updateHistory);
+  }
   activePage: PageId = 'dashboard';
   selectedReport: unknown;
   adminReportPhotoUrls: string[] = [];
@@ -180,12 +367,13 @@ export class App implements OnInit, OnDestroy {
   editorDraftSaved=false;
   editorDraftError='';
   editorDetailsLoading=false;
-  publicDraft=readDraft(draftKey('public','flood-report'));
-  publicDraftPending=!!this.publicDraft;
+  publicDraft: FormDraft | undefined;
+  publicDraftPending=false;
   publicDraftValues:Record<string,string|string[]>={};
   publicDraftSaved=false;
   publicDraftError='';
   get editorDraftKey(){return draftKey(this.api.user()?.userId??'anonymous',this.currentResource,this.editorId||'new');}
+  get publicDraftKey(){return draftKey(this.api.user()?.userId??'anonymous','flood-report');}
   get hasNewRecordDraft(){return !!readDraft(draftKey(this.api.user()?.userId??'anonymous',this.currentResource));}
   saveEditorDraft(){
     if(this.editorDraftPending||this.editorDetailsLoading)return;
@@ -211,13 +399,13 @@ export class App implements OnInit, OnDestroy {
   savePublicDraft(form:HTMLFormElement){
     if(this.publicDraftPending)return;
     const draft:FormDraft={values:draftValues(new FormData(form).entries()),step:0,updatedAt:Date.now(),hasPhotos:[...new FormData(form).values()].some(v=>v instanceof File&&v.size>0)};
-    this.publicDraftSaved=writeDraft(draftKey('public','flood-report'),draft);
+    this.publicDraftSaved=writeDraft(this.publicDraftKey,draft);
     this.publicDraftError=this.publicDraftSaved?'':'Browser draft unavailable. Keep this form open until the report is submitted.';
     this.publicDraft=draft;
   }
   resumePublicDraft(){this.publicDraftValues={...this.publicDraft?.values};this.publicDraftPending=false;this.publicDraftSaved=true;}
-  clearPublicDraft(form:HTMLFormElement,picker:LocationPickerComponent){form.reset();picker.clear();removeDraft(draftKey('public','flood-report'));this.publicDraft=undefined;this.publicDraftValues={};this.publicDraftPending=false;this.publicDraftSaved=false;this.publicDraftError='';}
-  reloadPublicDraft(){this.publicDraft=readDraft(draftKey('public','flood-report'));this.publicDraftPending=!!this.publicDraft;this.publicDraftValues={};this.publicDraftSaved=false;this.publicDraftError='';}
+  clearPublicDraft(form:HTMLFormElement,picker:LocationPickerComponent){form.reset();picker.clear();removeDraft(this.publicDraftKey);this.publicDraft=undefined;this.publicDraftValues={};this.publicDraftPending=false;this.publicDraftSaved=false;this.publicDraftError='';}
+  reloadPublicDraft(){this.publicDraft=readDraft(this.publicDraftKey);this.publicDraftPending=!!this.publicDraft;this.publicDraftValues={};this.publicDraftSaved=false;this.publicDraftError='';}
   discardEditorPrompt = false;
   private editorTrigger: HTMLElement | null = null;
   readonly shortRecordId = shortRecordId;
@@ -239,7 +427,7 @@ export class App implements OnInit, OnDestroy {
         const values = new FormData(form);
         this.editorReview = this.editorSections.map(section => ({ title: section.title, fields: section.fields.map(field => {
           const raw = String(values.get(field.name) ?? '');
-          let value = field.type === 'household-lookup' ? this.selectedHouseholdLabel : field.type === 'location' ? 'Pinned on map' : field.options?.find(option => option.value === raw)?.label ?? raw;
+          let value = field.type === 'resident-lookup' ? this.selectedAccountResidentLabel : field.type === 'household-lookup' ? this.selectedHouseholdLabel : field.type === 'location' ? 'Pinned on map' : field.options?.find(option => option.value === raw)?.label ?? raw;
           if(this.editorOutcome&&field.name==='evacuationStatus')value=this.editorOutcome+' (recorded outcome)';
           if (raw === 'Other') value += `: ${values.get(field.name === 'vulnerabilityType' ? 'vulnerabilityOther' : 'relationshipOther') || 'Not specified'}`;
           return { label: field.label, value: value || 'Not provided' };
@@ -288,13 +476,13 @@ export class App implements OnInit, OnDestroy {
   get navGroups() {
     return [
       { label: 'Start here', ids: ['dashboard'] },
-      { label: 'Flood response', ids: ['reports', 'map', 'dss', 'evacuation', 'notifications'] },
+      { label: 'Flood response', ids: ['reports', 'map', 'dss', 'contacts', 'planner', 'assistance', 'evacuation', 'notifications'] },
       { label: 'Community records', ids: ['residents', 'households'] },
-      { label: 'Reporting & administration', ids: ['statistics', 'users'] }
+      { label: 'Reporting & administration', ids: ['statistics', 'users', 'registrations'] }
     ].map(group => ({ label: group.label, items: group.ids.map(id=>this.visibleNavItems.find(item=>item.id===id)).filter((item): item is typeof this.navItems[number]=>!!item) })).filter(group => group.items.length);
   }
 
-  dashboardAttention?: { pending: number | '—'; residents: number | '—'; shelters: number | '—' };
+  dashboardAttention?: { pending: number | '—'; residents: number | '—'; shelters: number | '—'; help: number | '—' };
   zoneAssessment?: DssData;
   selectedZoneId = '';
   zoneAssessmentLoading = false;
@@ -485,6 +673,8 @@ export class App implements OnInit, OnDestroy {
   navItems: { id: PageId; label: string; icon: string; badge?: number }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: '⌂' },
     { id: 'dss', label: 'Decision Support (DSS)', icon: '◇' },
+    { id: 'planner', label: 'Evacuation Planner', icon: '♙' },
+    { id: 'assistance', label: 'Assistance and Shelters', icon: '⌂' },
     { id: 'map', label: 'Live Map & GIS', icon: '⌖' },
     { id: 'reports', label: 'Flood Reports', icon: '!' },
     { id: 'residents', label: 'Residents', icon: '♙' },
@@ -492,17 +682,23 @@ export class App implements OnInit, OnDestroy {
     { id: 'evacuation', label: 'Centers & Responders', icon: '⌂' },
     { id: 'statistics', label: 'Reports & Statistics', icon: '▥' },
     { id: 'notifications', label: 'Advisories & Hotlines', icon: '♢' },
-    { id: 'users', label: 'User Accounts', icon: '⚙' }
+    { id: 'users', label: 'User Accounts', icon: '⚙' },
+    { id: 'registrations', label: 'Resident Approvals', icon: '✓' },
+    { id: 'contacts', label: 'Assistance & Contacts', icon: '♡' }
   ];
 
   pageDetails: Record<PageId, { eyebrow: string; title: string; description: string; action: string }> = {
+    contacts: {eyebrow:'COMMUNITY OUTREACH',title:'Assistance & Contacts',description:'Review resident requests for help and track household contact and follow-up.',action:''},
+    registrations: {eyebrow:'RESIDENT VALIDATION',title:'Resident Approvals',description:'Validate self-registrations and link approved residents to their household records.',action:''},
     dashboard: { eyebrow: 'START HERE', title: 'Dashboard', description: 'See what needs attention and open your next task.', action: '' },
     map: { eyebrow: 'GEOSPATIAL OPERATIONS', title: 'Live Map & GIS', description: 'Review barangay boundaries, risk zones, incidents, routes, and evacuation shelters.', action: 'Add map record' },
     reports: { eyebrow: 'INCIDENT MANAGEMENT', title: 'Flood Reports', description: 'Validate community reports and coordinate a timely response.', action: 'New report' },
     residents: { eyebrow: 'COMMUNITY RECORDS', title: 'Residents', description: 'Manage resident information, vulnerability, and evacuation priority.', action: 'Add resident' },
     households: { eyebrow: 'COMMUNITY RECORDS', title: 'Households', description: 'Organize residents by household, zone, and current risk.', action: 'Add household' },
-    evacuation: { eyebrow: 'FLOOD RESPONSE', title: 'Centers & Responders', description: 'Manage evacuation centers, resident rosters, and responder availability. Dispatch rescue teams in DSS.', action: 'Add shelter' },
+    evacuation: { eyebrow: 'FLOOD RESPONSE', title: 'Centers & Responders', description: 'Manage evacuation centers, resident rosters, and responder availability. Dispatch rescue teams in Evacuation Planner.', action: 'Add shelter' },
     statistics: { eyebrow: 'REPORTING', title: 'Reports & Statistics', description: 'Review incident statistics and flood susceptibility references.', action: 'Export summary' },
+    planner: {eyebrow:'EMERGENCY OPERATIONS',title:'Evacuation Planner',description:'Plan evacuation and dispatch rescue teams.',action:''},
+    assistance: {eyebrow:'EMERGENCY OPERATIONS',title:'Assistance and Shelters',description:'Review assistance needs and shelter capacity.',action:''},
     dss: { eyebrow: 'DECISION SUPPORT', title: 'Decision Support System', description: 'Assess zone priorities, assistance needs, and shelter readiness.', action: 'Situation report' },
     notifications: { eyebrow: 'FLOOD RESPONSE', title: 'Advisories & Hotlines', description: 'Publish official flood advisories and maintain emergency phone numbers.', action: 'New advisory' },
     users: { eyebrow: 'SYSTEM ADMINISTRATION', title: 'User Accounts', description: 'Manage authorized local authority access and roles.', action: 'Add user' }
@@ -657,7 +853,8 @@ export class App implements OnInit, OnDestroy {
       users: [
         { name: 'fullName', label: 'Full name', required: true }, { name: 'username', label: 'Username', required: true },
         { name: 'email', label: 'Email', type: 'email', required: true },
-        { name: 'role', label: 'Role', type: 'select', required: true, options: options('Super Admin', 'Disaster Officer', 'Data Encoder') },
+        { name: 'role', label: 'Role', type: 'select', required: true, options: options('Super Admin', 'Disaster Officer', 'Data Encoder', 'Resident', 'Secretary') },
+        { name: 'residentId', label: 'Linked resident (required for Resident accounts)', type: 'resident-lookup' },
         { name: 'password', label: this.editorId ? 'New password (leave blank to keep current)' : 'Initial password', type: 'password', required: !this.editorId,
           placeholder: '12+ characters with uppercase, lowercase, and number' }
       ],
@@ -745,6 +942,8 @@ export class App implements OnInit, OnDestroy {
   get visibleNavItems() {
     const role = this.api.user()?.role;
     return this.navItems.filter((item) => {
+      if (role === 'Secretary') return item.id === 'registrations';
+      if (item.id === 'registrations') return role === 'Super Admin';
       if (item.id === 'users') return role === 'Super Admin';
       if (['reports', 'notifications'].includes(item.id)) return role === 'Super Admin' || role === 'Disaster Officer';
       if (['residents', 'households'].includes(item.id)) return role === 'Super Admin' || role === 'Data Encoder';
@@ -759,8 +958,8 @@ export class App implements OnInit, OnDestroy {
       this.liveNow.set(new Date());
     }, 1_000);
     this.dashboardRefreshTimer = window.setInterval(() => {
-      if (this.api.user() && this.activePage === 'dashboard' && !this.loading) this.loadDashboard();
-      if (!this.api.user()) this.loadPublicData();
+      if (this.api.user() && !this.isResident && this.activePage === 'dashboard' && !this.loading) this.loadDashboard();
+      if (!this.api.user() || this.isResident) this.loadPublicData();
     }, 30_000);
     this.resetToken = new URLSearchParams(window.location.search).get('token') ?? '';
     if (this.resetToken) { this.publicPage = 'login'; this.recoveryOpen = true; }
@@ -770,8 +969,8 @@ export class App implements OnInit, OnDestroy {
       this.sessionResolving = false;
       this.finishLoginLoading();
     })).subscribe({
-      next: ({ user }) => { if (!user.mustChangePassword) this.setPage(this.requestedAdminPage ?? 'dashboard', false); },
-      error: () => undefined
+      next: ({ user }) => { if (!user.mustChangePassword) this.openSignedInPage(false); },
+      error: () => { if (this.publicPage === 'account') this.navigatePublic('login', true); }
     });
   }
 
@@ -809,7 +1008,7 @@ export class App implements OnInit, OnDestroy {
     }
     this.loginLoading = true;
     this.api.login(cleanUsername, password).pipe(finalize(() => this.finishLoginLoading())).subscribe({
-      next: ({ user }) => { if (!user.mustChangePassword) this.setPage(this.requestedAdminPage ?? 'dashboard'); },
+      next: ({ user }) => { if (!user.mustChangePassword) this.openSignedInPage(); },
       error: (error) => {
         const fields = error?.error?.fieldErrors;
         if (fields && typeof fields === 'object' && Object.keys(fields).length) {
@@ -862,6 +1061,8 @@ export class App implements OnInit, OnDestroy {
   }
 
   logout() {
+    this.account = null;
+    this.publicDraft=undefined;this.publicDraftValues={};this.publicDraftPending=false;
     this.api.logout().subscribe({
       next: () => this.navigatePublic('home'),
       error: () => {
@@ -873,6 +1074,9 @@ export class App implements OnInit, OnDestroy {
   }
 
   navigatePublic(page: PublicPage, replace = false) {
+    if (page === 'login') this.residentLoginPage = this.publicPage === 'report' ? 'report' : 'account';
+    this.errorMessage = ''; this.successMessage = ''; this.fieldErrors = {};
+    if (this.isResident && (page === 'account' || page === 'report')) this.loadAccount();
     if(page==='report'&&this.publicPage!=='report')this.reloadPublicDraft();
     this.publicPage = page;
     this.requestedAdminPage = undefined;
@@ -880,7 +1084,9 @@ export class App implements OnInit, OnDestroy {
       home: '/',
       map: '/live-map',
       report: '/report',
-      login: '/login'
+      login: '/login',
+      account: '/my-account',
+      register: '/register'
     };
     const method = replace || window.location.pathname === path[page] ? 'replaceState' : 'pushState';
     window.history[method]({}, '', path[page]);
@@ -899,11 +1105,15 @@ export class App implements OnInit, OnDestroy {
       '/': 'home',
       '/live-map': 'map',
       '/report': 'report',
-      '/login': 'login'
+      '/login': 'login',
+      '/my-account': 'account',
+      '/register': 'register'
     };
     if (publicRoutes[path]) {
       if(publicRoutes[path]==='report'&&this.publicPage!=='report')this.reloadPublicDraft();
       this.publicPage = publicRoutes[path]!;
+      if (this.isResident && ['account','report'].includes(this.publicPage)) this.loadAccount();
+      if (!this.api.user() && this.publicPage === 'account' && !this.sessionResolving) this.navigatePublic('login', true);
       this.requestedAdminPage = undefined;
       sessionStorage.setItem('bantayBahaRoute', path);
       return;
@@ -1059,6 +1269,7 @@ export class App implements OnInit, OnDestroy {
 
   submitPublicReport(event: Event, incidentType: string, severityLevel: string, description: string, reporterName: string, reporterContact: string, cameraPhotos: FileList | null, uploadedPhotos: FileList | null, locationPicker: LocationPickerComponent) {
     event.preventDefault();
+    if (!this.canSubmitResidentReport) { this.errorMessage = 'Sign in with a validated resident account before submitting a flood report.'; return; }
     this.errorMessage = '';
     this.successMessage = '';
     const reportForm = event.currentTarget as HTMLFormElement;
@@ -1133,7 +1344,7 @@ export class App implements OnInit, OnDestroy {
       weather: this.api.currentWeather().pipe(catchError(() => of(null)))
     }).pipe(finalize(() => this.finishLoading())).subscribe({
       next: ({ summary, reports, alert, notifications, shelters, risk, weather }) => {
-        this.dashboardAttention = { pending: dashboardCount(summary.pendingReports), residents: dashboardCount(summary.forEvacuationResidents), shelters: dashboardCount(summary.nearCapacityShelters) };
+        this.dashboardAttention = { pending: dashboardCount(summary.pendingReports), residents: dashboardCount(summary.forEvacuationResidents), shelters: dashboardCount(summary.nearCapacityShelters), help: dashboardCount(summary.openHelpRequests) };
         this.metrics[0]!.value = String(summary.totalResidents ?? 0);
         this.metrics[0]!.note = `${summary.highPriorityResidents ?? 0} high · ${summary.mediumPriorityResidents ?? 0} medium · ${summary.lowPriorityResidents ?? 0} low priority`;
         this.metrics[1]!.value = String(summary.totalHouseholds ?? 0);
@@ -1198,7 +1409,7 @@ export class App implements OnInit, OnDestroy {
     }
     this.loginLoading = true;
     this.api.changePassword(currentPassword, newPassword).pipe(finalize(() => this.finishLoginLoading())).subscribe({
-      next: () => { this.fieldErrors = {}; this.setPage(this.requestedAdminPage ?? 'dashboard'); },
+      next: () => { this.fieldErrors = {}; form.reset(); this.openSignedInPage(); this.successMessage = 'Password changed successfully.'; },
       error: (error) => {
         const fields = error?.error?.fieldErrors;
         if (fields && Object.keys(fields).length) {
@@ -1277,6 +1488,8 @@ export class App implements OnInit, OnDestroy {
   }
 
   setPage(page: PageId, updateHistory = true) {
+    if (this.isResident) { this.navigatePublic('account', !updateHistory); return; }
+    if (this.api.user()?.role === 'Secretary') page = 'registrations';
     if(updateHistory)requestAnimationFrame(()=>{window.scrollTo({top:0});document.getElementById('main-workspace')?.focus({preventScroll:true});});
     this.headerNotificationsOpen = false;
     this.activePage = page;
@@ -1285,6 +1498,7 @@ export class App implements OnInit, OnDestroy {
     if (updateHistory && window.location.pathname !== path) window.history.pushState({}, '', path);
     sessionStorage.setItem('bantayBahaRoute', path);
     this.menuOpen = false;
+    if (page === 'registrations') {this.currentResource = 'resident-registrations';this.loadRegistrations();return;}
     if (page === 'dashboard') return this.loadDashboard();
     if (page === 'residents' || page === 'reports' || page === 'households') {
       this.loadZoneOptions();
@@ -1301,7 +1515,7 @@ export class App implements OnInit, OnDestroy {
       this.loadResource();
       return;
     }
-    if (page === 'statistics' || page === 'dss') {
+    if (['statistics','dss','planner','assistance','contacts'].includes(page)) {
       this.currentResource = page;
       this.sortBy = '';
       this.loading = false;
@@ -1350,8 +1564,8 @@ export class App implements OnInit, OnDestroy {
       shelters: resource === 'shelters',
       incidents: resource === 'flood-reports',
       routes: false,
-      rivers: this.adminMapLayers.rivers,
-      floodHazards: this.adminMapLayers.floodHazards
+      rivers: false,
+      floodHazards: false
     };
   }
 
@@ -1441,7 +1655,7 @@ export class App implements OnInit, OnDestroy {
           if (requestId !== this.resourceRequestId || resource !== this.currentResource) return;
           this.totalItems = totalItems;
           this.totalPages = Math.max(1, totalPages);
-          this.residentYears = availableYears;
+          this.residentYears = [...new Set([...availableYears,...Array.from({length:this.currentResidentYear-1999},(_,i)=>this.currentResidentYear-i)])].sort((a,b)=>b-a);
           this.residentYearSummary = summary;
           this.tableRows = items.map((row, index) => {
             const mapped = this.mapTableRow(row, index);
@@ -1696,6 +1910,8 @@ export class App implements OnInit, OnDestroy {
   }
 
   openEditor(row?: { id: string }) {
+    if (this.activePage === 'reports' && !row) return;
+    this.selectedAccountResident = undefined;
     if (this.activePage === 'residents' && this.isHistoricalResidentYear) return;
     this.editorTrigger = document.activeElement as HTMLElement | null;
     this.editorStep = 0;
@@ -1716,6 +1932,7 @@ export class App implements OnInit, OnDestroy {
     this.existingBarangayZones = this.currentResource === 'barangay-zones'
       ? [...this.rawRecords.values()]
       : [];
+    if (['barangay-zones', 'risk-zones'].includes(this.currentResource)) this.api.liveMap().subscribe({next: (data: any) => { if (this.editorOpen) { this.existingBarangayZones = data.zones ?? []; this.changeDetector.detectChanges(); } }, error: () => { this.errorMessage = 'Zone map could not be loaded. Close and retry.'; this.changeDetector.detectChanges(); }});
     if (!record && this.currentResource === 'barangay-zones') this.editorValues['zoneColor'] = '#1764C1';
     if (!record && this.currentResource === 'emergency-contacts') {
       this.editorValues['isPublic'] = true;
@@ -1724,7 +1941,7 @@ export class App implements OnInit, OnDestroy {
     if (record) {
       for (const field of this.editorFields) {
         const snake = field.name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-        const value = record[field.name] ?? record[snake] ?? '';
+        const value = record[field.name] ?? record[snake] ?? (field.name === 'polygonGeoJson' ? record['polygon_geojson'] : undefined) ?? '';
         this.editorValues[field.name] = field.type === 'date' ? this.dateInputValue(value) : value;
       }
       if (this.activePage === 'residents') this.updateResidentAge(String(this.editorValues['dateOfBirth'] ?? ''));
@@ -1743,6 +1960,13 @@ export class App implements OnInit, OnDestroy {
       this.editorValues['relationshipOther'] = record['relationship_other'] ?? record['relationshipOther'] ?? '';
     }
     this.editorOpen = true;
+    if (this.currentResource === 'users' && this.editorValue('residentId')) {
+      const id = this.editorValue('residentId');
+      this.api.get<Record<string, unknown>>('residents', id).subscribe({
+        next: resident => { if (this.editorOpen && this.editorValue('residentId') === id) {this.selectedAccountResident = resident; this.changeDetector.detectChanges();} },
+        error: () => undefined
+      });
+    }
     this.changeDetector.detectChanges();
     document.querySelector<HTMLButtonElement>('#record-editor .modal-close')?.focus();
     this.errorMessage = '';
@@ -2137,7 +2361,10 @@ export class App implements OnInit, OnDestroy {
   private focusEditorField(form: HTMLFormElement, name: string) {
     const step = this.editorSections.findIndex(section => section.fields.some(field => field.name === name));
     if (this.editorIsWizard && step >= 0) { this.editorStep = step; this.changeDetector.detectChanges(); }
-    window.requestAnimationFrame(() => (form.elements.namedItem(name) as HTMLElement | null)?.focus());
+    window.requestAnimationFrame(() => {
+      const field = form.elements.namedItem(name) as HTMLInputElement | null;
+      (field?.type === 'hidden' ? field.closest('label')?.querySelector<HTMLElement>('.lookup-trigger') : field)?.focus();
+    });
   }
 
   private handleEditorError(error: any, form: HTMLFormElement, fallback: string) {

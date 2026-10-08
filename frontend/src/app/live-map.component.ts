@@ -24,15 +24,15 @@ type MapStyle = 'roadmap' | 'satellite' | 'hybrid' | 'terrain';
         <details class="map-legend-control" open>
           <summary><span>Map legend</span><small>Visible layers</small></summary>
           <div class="legend-items" aria-label="Map symbols">
-            @if (visibleLayers?.barangayZones !== false) {
+            @if (visibleLayers?.barangayZones !== false || visibleLayers?.riskZones !== false) {
               <p class="legend-group-title">Flood risk</p>
               <span><i class="legend-area low"></i><b>Low</b></span>
               <span><i class="legend-area moderate"></i><b>Moderate</b></span>
               <span><i class="legend-area high"></i><b>High</b></span>
               <span><i class="legend-area critical"></i><b>Critical</b></span>
-              <span><i class="legend-line boundary"></i>Barangay boundary</span>
+              @if (visibleLayers?.barangayZones !== false) {<span><i class="legend-line boundary"></i>Barangay zone boundary</span>}
             }
-            @if (visibleLayers?.riskZones !== false) { <span><i class="legend-area risk-zone"></i>Risk-zone overlay</span> }
+            <span><i class="legend-line boundary"></i>Colacling boundary</span>
             @if (visibleLayers?.floodHazards === true) {
               <p class="legend-group-title">Official flood susceptibility</p>
               <span><i class="legend-area hazard-low"></i>Low susceptibility</span>
@@ -237,7 +237,7 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
       this.boundaryFitted = false;
     }
     this.overlay.clearLayers();
-    if (this.visibleLayers?.barangayZones !== false) this.drawOfficialBoundary();
+    this.drawOfficialBoundary();
     if (this.visibleLayers?.floodHazards === true && this.floodHazards) {
       const hazardColors: Record<string, string> = { '01': '#e3d1ff', '02': '#b045ff', '03': '#5900ff', '04': '#002673' };
       const hazardLabels: Record<string, string> = { '01': 'Low', '02': 'Moderate', '03': 'High', '04': 'Very High' };
@@ -332,7 +332,7 @@ export class LiveMapComponent implements AfterViewInit, OnChanges, OnDestroy {
   }
 
   private loadOfficialBoundary() {
-    const query = 'https://ulap-nga.georisk.gov.ph/arcgis/rest/services/PSA/BarangayPopMF/MapServer/0/query?geometry=122.8852784%2C13.7828976&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=true&f=geojson';
+    const query = '/colacling-boundary.geojson';
     fetch(query)
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((collection: GeoJSON.FeatureCollection) => {

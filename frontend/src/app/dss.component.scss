@@ -30,3 +30,5 @@
 :host [hidden]{display:none!important}
 .section-select{position:sticky;top:0;z-index:8;display:flex;align-items:center;gap:10px;padding:6px 10px;margin-bottom:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);font-weight:700}.section-select select{flex:1;min-width:0;min-height:44px;padding:8px;border:1px solid var(--border);border-radius:8px;color:var(--text);background:var(--surface);font:inherit}.section-select select:focus-visible{outline:3px solid var(--accent)}
 @media(max-width:700px){.response-navigation{grid-template-columns:repeat(3,minmax(0,1fr))}.response-navigation button:first-child{grid-column:span 2}.response-navigation button:last-child{grid-column:auto}}
+
+.decision-reference{margin-top:18px}.response-update-form label{display:grid;gap:6px;margin:16px 0}.response-update-form select,.response-update-form textarea{font:inherit;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text)}.response-update-form .planner-checkbox{display:flex}.decision-reference+dialog li{margin-bottom:12px}

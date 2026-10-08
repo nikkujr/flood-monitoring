@@ -10,7 +10,7 @@ export interface SessionUser {
   fullName: string;
   username: string;
   email: string;
-  role: 'Super Admin' | 'Disaster Officer' | 'Data Encoder';
+  role: 'Super Admin' | 'Disaster Officer' | 'Data Encoder' | 'Resident' | 'Secretary';
   mustChangePassword: boolean;
 }
 export interface ZoneStatusPreview {
@@ -65,7 +65,7 @@ export class ApiService {
   editRescueTeam(id:string,input:{name:string;leaderId:string;memberIds:string[];vehicle:string;passengerCapacity:number}){return this.http.put<{message:string}>(`${this.baseUrl}/rescue/teams/${id}`,input);}
   recordResidentOutcome(id:string,input:{outcome:string;revision:number;source:string;notes:string;lastSeenLocation:string;observedAt:string;confirmed:boolean}){return this.http.post<{message:string}>(`${this.baseUrl}/rescue/outcomes/${id}`,input);}
   setRescueTeamAvailability(id:string,availability:string){return this.http.put<{message:string}>(`${this.baseUrl}/rescue/teams/${id}/availability`,{availability});}
-  dispatchRescue(input:{teamId:string;shelterId:string;residentIds:string[];pickup:string;instructions:string;expectedStatuses:Record<string,string>}){return this.http.post<{message:string}>(`${this.baseUrl}/rescue/missions`,input);}
+  dispatchRescue(input:{teamId:string;shelterId:string;residentIds:string[];pickup:string;instructions:string;expectedStatuses:Record<string,string>;assistanceRequest?:{requestId:string;revision:number;confirmed:true}}){return this.http.post<{message:string}>(`${this.baseUrl}/rescue/missions`,input);}
   updateRescue(id:string,input:{status:string;revision:number;note:string;confirmedArrival:boolean;arrivalResidentIds?:string[]}){return this.http.post<{message:string}>(`${this.baseUrl}/rescue/missions/${id}/status`,input);}
   private readonly baseUrl = environment.apiBaseUrl;
   readonly accessToken = signal<string | null>(null);
@@ -85,6 +85,10 @@ export class ApiService {
       this.accessToken.set(accessToken);
       this.user.set(user);
     }));
+  }
+
+  register(body: Record<string, unknown>) {
+    return this.http.post<{message:string}>(`${this.baseUrl}/auth/register`,body);
   }
 
   refresh() {
@@ -213,6 +217,7 @@ export class ApiService {
       pendingReports: number;
       forEvacuationResidents: number;
       nearCapacityShelters: number;
+      openHelpRequests: number;
     }>(`${this.baseUrl}/dashboard/summary`);
   }
 

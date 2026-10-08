@@ -1,5 +1,15 @@
 # BantayBaha Manual Acceptance Checklist
 
+## Resident check-ins and household contact tracking — October 9, 2026
+
+- Approved residents submit Need help, Safe at home, or Reached shelter from My Account → Check-ins & help. Require a current location; help requests also require assistance details. Identity and household come from the account. Resident history is private to its linked resident.
+- Pending/rejected, inactive, unlinked, and temporary-password accounts cannot submit. Residents and Secretaries cannot read staff assistance/contact queues. Super Admin, Disaster Officer, and Data Encoder can review requests and record household contacts.
+- Requests for help appear in the dashboard count and ahead of other check-ins in the queue. A second unresolved help request is rejected, including simultaneous submissions. Safe/shelter check-ins do not close an unresolved help request or change evacuation status/occupancy.
+- Review requires notes and confirmation. Acknowledge or close after verification; history retains staff/time/notes. Concurrent or closed-record edits fail without overwriting history. Use the evacuation planner for dispatch and confirmed arrivals.
+- Household contacts include verified households with active residents. Search by number, household head, or zone; filter contact status and assign active staff. Uncontacted households appear without needing a saved contact row. Updates retain history and reject stale revisions. Contacts persist until explicitly updated; there is no incident reset yet.
+- Automated API check: `node --import tsx src/community-support.integration.test.ts` from backend, with PORT matching the local API. It creates and cleans isolated records. Browser checks on fictional records cover resident submission, staff acknowledgement, household assignment/follow-up, and history. At 390×844, the contact dialog has equal 335px client/scroll widths and no horizontal overflow.
+- Deploy with the full additive `db:migrate` before the new backend/frontend. Local tables were created without resetting existing records. Production builds pass with existing frontend bundle/style warnings.
+
 Use a MySQL 8.4 database initialized with `backend/sql/schema.sql`, configure `backend/.env`, run `npm run seed`, then start both projects.
 
 ## Authentication and accounts
@@ -258,3 +268,20 @@ Before presenting, reconcile legacy duplicate zone labels and the demo centers' 
 ### Recorded outcomes in the resident editor (October 8, 2026)
 
 Current-year resident results now include the recorded outcome, allowing the table and editor to show Missing/Deceased consistently. Historical annual snapshots are not relabeled with current outcomes. For these residents, the editor displays the recorded outcome and no shelter placement, provides a history viewer, and keeps corrections in the sourced DSS outcome workflow. Review entries also display the outcome. Registry record status is explicitly labeled separately from a person's condition. Validation: helper checks, current-year outcome API assertion, outcome integration checks, TypeScript check, and production Angular build pass with existing size warnings.
+
+
+## Word document changes on 9 October 2026
+
+- In Live Map & GIS, selecting Barangay zones or Risk zones hides other overlays. Explicit overlay toggles still work and the legend follows visible layers.
+- Edit a zone name or color without drawing again. Its original Polygon or MultiPolygon, including holes, must stay unchanged.
+- Add a risk zone by selecting a barangay zone from the map or dropdown. Its saved boundary and assessed risk colors are visible.
+- Add an evacuation center from either GIS or Centers & Responders. The picker shows Colacling and zone boundaries. Pinning or sharing a location outside Colacling must fail. The API must reject an outside location too.
+- Select a historical record year, preview and import a CSV, and check that only that year receives records. Re-importing the same resident must fail without partially writing other rows. Existing historical records remain uneditable. Use an archived household when available; otherwise the import copies the matching current household into that year's archive.
+- Family dialog priorities must match the live Evacuation Planner assessment rather than the manually recorded priority.
+- DSS opens the priority-area and priority-household tables, without summary cards. Assessment Filters sits beside Refresh on DSS and Reports & Statistics. Decision Rules is available through a footer reference.
+- Evacuation Planner and Assistance and Shelters have separate sidebar entries. The planner retains mission dispatch, teams, simulations, and confirmed arrival workflows.
+- Response Management has been removed from the application navigation and page routing at the user's request.
+
+Run `frontend/scripts/check-dss-pages.js` in the signed-in browser console for navigation checks. With a local API running, run `node --import tsx src/document-changes.integration.test.ts` from `backend` (set PORT to the API's port). The integration check creates and removes its own fixture records.
+
+Response action storage and backend APIs remain available; removing the page does not delete saved records. Include the backend `data` directory in deployments; the packaging script copies it automatically.

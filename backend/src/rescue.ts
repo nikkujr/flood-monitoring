@@ -12,7 +12,7 @@ const teamInput=z.object({name:text(120),leaderId:z.string().uuid(),memberIds:z.
   .refine(t=>t.memberIds.includes(t.leaderId),{message:'Choose a team leader from the selected responders.',path:['leaderId']})
   .refine(t=>!t.vehicle||t.passengerCapacity>0,{message:'Enter passenger spaces when using a vehicle.',path:['passengerCapacity']})
   .transform(t=>({...t,passengerCapacity:t.vehicle?t.passengerCapacity:0}));
-const dispatchInput=z.object({teamId:z.string().uuid(),shelterId:z.string().uuid(),residentIds:z.array(z.string().uuid()).min(1).max(100).refine(ids=>new Set(ids).size===ids.length,'Select each resident once'),pickup:text(500),instructions:z.string().trim().max(1000).default(''),expectedStatuses:z.record(z.string().uuid(),text(30))});
+const dispatchInput=z.object({teamId:z.string().uuid(),shelterId:z.string().uuid(),residentIds:z.array(z.string().uuid()).min(1).max(100).refine(ids=>new Set(ids).size===ids.length,'Select each resident once'),pickup:text(500),instructions:z.string().trim().max(1000).default(''),expectedStatuses:z.record(z.string().uuid(),text(30)),assistanceRequest:z.object({requestId:z.string().uuid(),revision:z.number().int().min(0),confirmed:z.literal(true)}).strict().optional()});
 const updateInput=z.object({status:z.enum(['At pickup','Transporting','Blocked','Arrived','Cancelled','Dispatched']),revision:z.number().int().positive(),note:z.string().trim().max(1000).default(''),confirmedArrival:z.boolean().default(false),arrivalResidentIds:z.array(z.string().uuid()).min(1).max(100).refine(ids=>new Set(ids).size===ids.length,'Select each arriving resident once').optional()});
 const fail=(message:string,status=409)=>{throw Object.assign(new Error(message),{status});};
 const wrap=(handler:(req:AuthRequest,res:any)=>Promise<unknown>)=>(req:any,res:any,next:any)=>Promise.resolve(handler(req,res)).catch((error:any)=>{
@@ -123,6 +123,14 @@ rescueRouter.post('/missions',wrap(async(req,res)=>{
     if(unlocated.length)fail('A resident is recorded Missing or Deceased. Use the outcome follow-up list; they cannot receive ordinary evacuation placement.');
     const [active]=await c.query<any[]>('SELECT resident_id FROM rescue_active_residents WHERE resident_id IN (?)',[input.residentIds]);
     if(active.length)fail('A selected resident already has a rescue team assigned. Refresh to view that mission.');
+    if(input.assistanceRequest){
+      const [[request]]=await c.query<any[]>('SELECT * FROM assistance_requests WHERE request_id=? FOR UPDATE',[input.assistanceRequest.requestId]);
+      if(!request||request.kind!=='Need help'||request.status==='Closed'||request.revision!==input.assistanceRequest.revision)fail('The assistance request changed or is no longer open. Refresh and review it again.');
+      if(people.length!==1||people[0].resident_id!==request.resident_id)fail('Choose the resident who submitted this assistance request.',400);
+      const note='Rescue need verified; team dispatched. Mission '+id+'. '+input.instructions;
+      await c.execute("UPDATE assistance_requests SET status='Acknowledged',review_note=?,revision=revision+1 WHERE request_id=?",[note.slice(0,1000),request.request_id]);
+      await c.execute("INSERT INTO assistance_request_updates(request_id,status,note,recorded_by_user_id) VALUES(?,'Acknowledged',?,?)",[request.request_id,note.slice(0,1000),req.user!.userId]);
+    }
     await c.execute("INSERT INTO rescue_missions(mission_id,team_id,shelter_id,pickup,instructions,status,residents,team_snapshot,shelter_name) VALUES(?,?,?,?,?,'Dispatched',?,?,?)",[id,input.teamId,input.shelterId,input.pickup,input.instructions,JSON.stringify(people.map(r=>({id:r.resident_id,name:r.full_name,household:r.household_number,address:r.address_line,status:r.evacuation_status}))),JSON.stringify({...team,members:roster}),center.shelter_name]);
     for(const member of roster)await c.execute('INSERT INTO rescue_active_responders(volunteer_id,mission_id) VALUES(?,?)',[member.volunteer_id,id]);
     for(const person of people)await c.execute('INSERT INTO rescue_active_residents(resident_id,mission_id) VALUES(?,?)',[person.resident_id,id]);

@@ -13,17 +13,22 @@ import { config } from "./config.js";
 import { db, healthcheck } from "./db.js";
 import { loadDss, loadDssSource } from "./dss-api.js";
 import { simulateDss, simulationInput } from './dss-simulation.js';
+import {responseManagementRouter} from './response-management.js';
+import {communitySupportRouter} from './community-support.js';
 import {rescueRouter} from './rescue.js';
 import {syncShelterOccupancy} from './shelter-occupancy.js';
 import { criticalZoneStatus, zoneStatusInput } from './dss-zone-status.js';
-import { vulnerabilities } from "./dss.js";
+import {colaclingBoundary, pointInsideGeometry} from './map-boundary.js';
+import { vulnerabilities, priorityFor } from "./dss.js";
 import { reportReviewInput, reportTransitions } from "./report-review.js";
 import { parseResidentCsv, residentImportSchema } from "./resident-import.js";
 import {residentReadiness,residentQualityConditions,reportMissingZone} from './record-readiness.js';
 import {
   createAccessToken,
+  assertResidentApproved,
   createRefreshToken,
   requireAuth,
+  requireValidatedResident,
   requireRoles,
   revokeRefreshToken,
   rotateRefreshToken
@@ -51,6 +56,8 @@ app.use(helmet({
 app.use(cors({ origin: config.frontendOrigins, credentials: true }));
 app.use(express.json({ limit: "1mb" }));
 app.use('/api/rescue',rescueRouter);
+app.use('/api/response-actions',responseManagementRouter);
+app.use('/api/community-support',communitySupportRouter);
 
 const asyncRoute = (handler: (req: any, res: any) => Promise<unknown>) =>
   (req: any, res: any, next: any) => Promise.resolve(handler(req, res)).catch(next);
@@ -134,6 +141,7 @@ app.post("/api/auth/login", asyncRoute(async (req, res) => {
     return res.status(401).json({ message: "Invalid username or password" });
   }
   const user: AuthUser = { userId: row.user_id, username: row.username, role: row.role, credentialVersion: row.credential_version };
+  await assertResidentApproved(user);
   const refreshToken = await createRefreshToken(user);
   await db.execute("UPDATE users SET last_login_at=NOW() WHERE user_id=?", [user.userId]);
   res.cookie("refreshToken", refreshToken, refreshCookie);
@@ -160,7 +168,40 @@ app.get("/api/auth/me", requireAuth, asyncRoute(async (req: AuthRequest, res) =>
     "SELECT user_id userId,full_name fullName,username,email,role,is_active isActive,must_change_password mustChangePassword,last_login_at lastLoginAt FROM users WHERE user_id=?",
     [req.user!.userId]
   );
-  res.json(rows[0]);
+  const [residents] = await db.query<any[]>(
+    `SELECT r.resident_id,r.full_name,CAST(r.date_of_birth AS CHAR) date_of_birth,r.sex,r.contact_number,r.address_line,r.relationship_to_head,r.record_status,r.emergency_contact_name,r.emergency_contact_number,r.occupation,r.education,r.marital_status,r.philsys_number,r.philhealth_number,r.sanitary_toilet,r.house_type,r.pwd_specify,r.can_swim,r.solo_parent,
+      h.household_number,h.head_of_household_name,h.address_line household_address,h.verification_status,z.zone_name
+     FROM resident_accounts a JOIN residents r ON r.resident_id=a.resident_id JOIN households h ON h.household_id=r.household_id JOIN zones z ON z.zone_id=h.zone_id WHERE a.user_id=?`, [req.user!.userId]
+  );
+  const [registrations] = await db.query<any[]>('SELECT CAST(date_of_birth AS CHAR) date_of_birth,contact_number,address_line,household_number,status,review_notes,reviewed_at,created_at FROM resident_registrations WHERE user_id=?', [req.user!.userId]);
+  res.json({ ...rows[0], resident: residents[0] ?? null, registration: registrations[0] ?? null });
+}));
+
+app.put('/api/auth/profile', requireAuth, requireRoles('Resident'), requireValidatedResident, asyncRoute(async (req:AuthRequest,res) => {
+  const input=z.object({
+    fullName:z.string().trim().min(2).max(160),dateOfBirth:residentImportSchema.shape.date_of_birth,sex:residentImportSchema.shape.sex,
+    email:z.string().trim().toLowerCase().email().max(190),contactNumber:z.string().trim().max(30),addressLine:z.string().trim().min(5).max(255),
+    emergencyContactName:z.string().trim().max(160),emergencyContactNumber:z.string().trim().max(30),
+    occupation:z.string().trim().max(160),education:z.string().trim().max(160),maritalStatus:z.enum(['','Single','Married','Widow']),
+    philsysNumber:z.string().trim().max(80).optional(),philhealthNumber:z.string().trim().max(80).optional(),pwdSpecify:z.string().trim().max(160).optional(),
+    sanitaryToilet:z.enum(['','With','Without']).optional(),houseType:z.enum(['','Concrete','Semi concrete','Light materials']).optional(),canSwim:z.enum(['','Yes','No']).optional(),soloParent:z.enum(['','Yes','No']).optional()
+  }).strict().parse(req.body);
+  await ensureUniqueUserIdentity(req.user!.username,input.email,req.user!.userId);
+  const connection=await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [records]=await connection.query<any[]>('SELECT r.resident_id,r.household_id FROM resident_accounts a JOIN residents r ON r.resident_id=a.resident_id WHERE a.user_id=? FOR UPDATE',[req.user!.userId]);
+    if(!records[0]) {await connection.rollback();return res.status(403).json({message:'Your account has no linked resident record.'});}
+    await assertResidentApproved(req.user!,connection);
+    await validateResource('residents',{...input,householdId:records[0].household_id},records[0].resident_id,connection);
+    await connection.execute('UPDATE residents SET full_name=?,date_of_birth=?,sex=?,contact_number=?,address_line=?,emergency_contact_name=?,emergency_contact_number=?,occupation=?,education=?,marital_status=? WHERE resident_id=?',[input.fullName,input.dateOfBirth,input.sex,input.contactNumber || null,input.addressLine,input.emergencyContactName || null,input.emergencyContactNumber || null,input.occupation || null,input.education || null,input.maritalStatus || null,records[0].resident_id]);
+    const extraFields={philsysNumber:'philsys_number',philhealthNumber:'philhealth_number',sanitaryToilet:'sanitary_toilet',houseType:'house_type',pwdSpecify:'pwd_specify',canSwim:'can_swim',soloParent:'solo_parent'} as const;
+    const extras=Object.entries(extraFields).filter(([field]) => input[field as keyof typeof extraFields] !== undefined);
+    if(extras.length) await connection.execute(`UPDATE residents SET ${extras.map(([,column]) => column+'=?').join(',')} WHERE resident_id=?`,[...extras.map(([field]) => input[field as keyof typeof extraFields] || null),records[0].resident_id]);
+    await connection.execute('UPDATE users SET full_name=?,email=? WHERE user_id=?',[input.fullName,input.email,req.user!.userId]);
+    await connection.commit();
+  } catch(error) {await connection.rollback();throw error;} finally {connection.release();}
+  res.json({message:'Your information has been updated.',fullName:input.fullName,email:input.email});
 }));
 
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
@@ -259,9 +300,22 @@ const userInput = z.object({
   fullName: z.string().trim().min(2),
   username: z.string().trim().min(3),
   email: z.string().trim().toLowerCase().email(),
-  role: z.enum(["Super Admin", "Disaster Officer", "Data Encoder"]),
+  role: z.enum(["Super Admin", "Disaster Officer", "Data Encoder", "Resident", "Secretary"]),
+  residentId: z.union([z.uuid(), z.literal('')]).optional(),
   password: z.string().min(12, "Password must contain at least 12 characters.").regex(/[A-Z]/, "Password must include an uppercase letter.").regex(/[a-z]/, "Password must include a lowercase letter.").regex(/\d/, "Password must include a number.").optional()
 });
+
+async function linkResidentAccount(connection: any, userId: string, input: z.infer<typeof userInput>) {
+  if (input.role === 'Resident') {
+    if (!input.residentId) throw new z.ZodError([{code:'custom',path:['residentId'],message:'Select the resident record for this account.'}]);
+    const [records] = await connection.query("SELECT r.resident_id FROM residents r JOIN households h ON h.household_id=r.household_id WHERE r.resident_id=? AND r.record_status='Active' AND h.verification_status='Verified' FOR UPDATE", [input.residentId]);
+    if (!records.length) throw new z.ZodError([{code:'custom',path:['residentId'],message:'Choose an active resident in a verified household.'}]);
+    const [linked] = await connection.query('SELECT user_id FROM resident_accounts WHERE resident_id=? AND user_id<>?', [input.residentId,userId]);
+    if (linked.length) throw new z.ZodError([{code:'custom',path:['residentId'],message:'This resident already has an account.'}]);
+  }
+  await connection.execute('DELETE FROM resident_accounts WHERE user_id=?', [userId]);
+  if (input.role === 'Resident') await connection.execute('INSERT INTO resident_accounts(user_id,resident_id) VALUES(?,?)', [userId,input.residentId]);
+}
 
 async function ensureUniqueUserIdentity(username: string, email: string, excludedUserId?: string) {
   const params: string[] = [username, email];
@@ -278,8 +332,74 @@ async function ensureUniqueUserIdentity(username: string, email: string, exclude
   throw new z.ZodError([{ code: "custom", path: [field], message: `That ${field} is already used by another account` }]);
 }
 
+app.post('/api/auth/register', asyncRoute(async (req, res) => {
+  const input = z.object({
+    fullName: userInput.shape.fullName.max(160), username: userInput.shape.username.max(80), email: userInput.shape.email.max(190),
+    password: userInput.shape.password.unwrap().max(128),
+    dateOfBirth: z.iso.date().refine(value => value <= new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Shanghai'}), 'Birth date cannot be in the future.'),
+    contactNumber: z.string().trim().min(7).max(30).regex(/^\+?[0-9() -]+$/, 'Enter a valid contact number.').refine(value => value.replace(/\D/g,'').length >= 7, 'Enter a valid contact number.'),
+    addressLine: z.string().trim().min(5).max(255), householdNumber: z.string().trim().max(80).optional().default('')
+  }).parse(req.body);
+  await ensureUniqueUserIdentity(input.username, input.email);
+  const user: AuthUser = {userId: randomUUID(), username: input.username, role: 'Resident', credentialVersion: 0};
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute("INSERT INTO users(user_id,full_name,username,email,password_hash,role) VALUES(?,?,?,?,?,'Resident')", [user.userId,input.fullName,input.username,input.email,await bcrypt.hash(input.password,12)]);
+    await connection.execute('INSERT INTO resident_registrations(user_id,date_of_birth,contact_number,address_line,household_number) VALUES(?,?,?,?,?)', [user.userId,input.dateOfBirth,input.contactNumber,input.addressLine,input.householdNumber || null]);
+    await connection.commit();
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+  res.status(201).json({message:'Registration submitted. You can sign in after the barangay secretary validates and approves your account.'});
+}));
+
+app.get('/api/resident-registrations', requireAuth, requireRoles('Super Admin','Secretary'), asyncRoute(async (req,res) => paginated(res,'resident_registrations s JOIN users u ON u.user_id=s.user_id',req,{
+  columns:'s.*,CAST(s.date_of_birth AS CHAR) date_of_birth,u.full_name,u.username,u.email,u.is_active',
+  searchColumns:['u.full_name','u.username','s.household_number','s.address_line'],sortFields:['s.created_at'],
+  filterFields:{status:{column:'s.status',exact:true}}
+})));
+app.get('/api/resident-registrations/residents', requireAuth, requireRoles('Super Admin','Secretary'), asyncRoute(async (req,res) => paginated(res,'residents r JOIN households h ON h.household_id=r.household_id JOIN zones z ON z.zone_id=h.zone_id',req,{
+  columns:'r.resident_id,r.full_name,CAST(r.date_of_birth AS CHAR) date_of_birth,r.address_line,r.contact_number,r.record_status,h.household_number,h.verification_status,z.zone_name,(SELECT user_id FROM resident_accounts a WHERE a.resident_id=r.resident_id) linked_user_id',
+  searchColumns:['r.full_name','r.contact_number','r.address_line','h.household_number'],sortFields:['r.full_name']
+})));
+app.get('/api/resident-registrations/households', requireAuth, requireRoles('Super Admin','Secretary'), asyncRoute(async (req,res) => paginated(res,'households h JOIN zones z ON z.zone_id=h.zone_id',req,{
+  columns:'h.household_id,h.household_number,h.head_of_household_name,h.address_line,z.zone_name',where:"h.verification_status='Verified'",
+  searchColumns:['h.household_number','h.head_of_household_name','h.address_line'],sortFields:['h.household_number']
+})));
+app.post('/api/resident-registrations/:id/review', requireAuth, requireRoles('Super Admin','Secretary'), asyncRoute(async (req:AuthRequest,res) => {
+  const input=z.object({status:z.enum(['Approved','Rejected']),residentId:z.uuid().optional(),newResident:z.object({
+    householdId:z.uuid(),fullName:z.string().trim().min(2).max(160),dateOfBirth:residentImportSchema.shape.date_of_birth,
+    sex:residentImportSchema.shape.sex,addressLine:z.string().trim().min(5).max(255),contactNumber:z.string().trim().max(30),priorityLevel:residentImportSchema.shape.priority_level
+  }).strict().optional(),notes:z.string().trim().max(1000).default(''),confirmed:z.boolean().default(false)}).parse(req.body);
+  if(input.status==='Approved' && (!input.confirmed || Boolean(input.residentId) === Boolean(input.newResident))) return res.status(400).json({message:'Select an existing resident or add a new resident, and confirm identity and household validation.'});
+  if(input.status==='Rejected' && input.newResident) return res.status(400).json({message:'A rejected registration cannot create a resident.'});
+  if(input.status==='Rejected' && input.notes.length<5) return res.status(400).json({message:'Explain why the registration is rejected.'});
+  const userId=String(req.params.id), connection=await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [requests]=await connection.query<any[]>("SELECT s.status,u.role,u.is_active FROM resident_registrations s JOIN users u ON u.user_id=s.user_id WHERE s.user_id=? FOR UPDATE",[userId]);
+    if(!requests[0]) {await connection.rollback();return res.status(404).json({message:'Registration not found.'});}
+    if(requests[0].status!=='Pending' || requests[0].role!=='Resident' || !requests[0].is_active) {await connection.rollback();return res.status(409).json({message:'This registration has changed or the account is inactive. Refresh the review queue.'});}
+    if(input.status==='Approved') {
+      let residentId=input.residentId;
+      if(input.newResident) {
+        const resident=input.newResident;
+        const [households]=await connection.query<any[]>("SELECT household_id FROM households WHERE household_id=? AND verification_status='Verified' FOR UPDATE",[resident.householdId]);
+        if(!households.length) throw new z.ZodError([{code:'custom',path:['householdId'],message:'Choose a verified household before adding this resident.'}]);
+        await validateResource('residents',resident,undefined,connection);
+        residentId=randomUUID();
+        await connection.execute('INSERT INTO residents(resident_id,household_id,full_name,date_of_birth,sex,address_line,contact_number,priority_level) VALUES(?,?,?,?,?,?,?,?)',[residentId,resident.householdId,resident.fullName,resident.dateOfBirth,resident.sex,resident.addressLine,resident.contactNumber || null,resident.priorityLevel]);
+      }
+      await linkResidentAccount(connection,userId,{fullName:'',username:'',email:'',role:'Resident',residentId});
+    }
+    else await connection.execute('DELETE FROM resident_accounts WHERE user_id=?',[userId]);
+    await connection.execute('UPDATE resident_registrations SET status=?,review_notes=?,reviewed_by_user_id=?,reviewed_at=NOW() WHERE user_id=?',[input.status,input.notes,req.user!.userId,userId]);
+    await connection.commit();
+  } catch(error) {await connection.rollback();throw error;} finally {connection.release();}
+  res.json({message:`Resident registration ${input.status.toLowerCase()}.`});
+}));
+
 app.get("/api/users", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => paginated(res, "users", req, {
-  columns: "user_id,full_name,username,email,role,is_active,last_login_at,created_at,updated_at",
+  columns: "user_id,full_name,username,email,role,is_active,last_login_at,created_at,updated_at,(SELECT resident_id FROM resident_accounts a WHERE a.user_id=users.user_id) resident_id",
   searchColumns: ["full_name", "username", "email"],
   sortFields: ["full_name", "username", "email", "role", "is_active", "last_login_at", "created_at"]
 })));
@@ -287,14 +407,20 @@ app.post("/api/users", requireAuth, requireRoles("Super Admin"), asyncRoute(asyn
   const input = userInput.extend({ password: userInput.shape.password.unwrap() }).parse(req.body);
   await ensureUniqueUserIdentity(input.username, input.email);
   const id = randomUUID();
-  await db.execute(
-    "INSERT INTO users(user_id,full_name,username,email,password_hash,role) VALUES(?,?,?,?,?,?)",
-    [id, input.fullName, input.username, input.email, await bcrypt.hash(input.password, 12), input.role]
-  );
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute(
+      "INSERT INTO users(user_id,full_name,username,email,password_hash,role,must_change_password) VALUES(?,?,?,?,?,?,?)",
+      [id, input.fullName, input.username, input.email, await bcrypt.hash(input.password, 12), input.role, input.role === 'Resident']
+    );
+    await linkResidentAccount(connection, id, input);
+    await connection.commit();
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
   res.status(201).json({ userId: id });
 }));
 app.get("/api/users/:id", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => {
-  const [rows] = await db.execute("SELECT user_id userId,full_name fullName,username,email,role,is_active isActive,last_login_at lastLoginAt FROM users WHERE user_id=?", [String(req.params.id)]);
+  const [rows] = await db.execute("SELECT user_id userId,full_name fullName,username,email,role,is_active isActive,last_login_at lastLoginAt,(SELECT resident_id FROM resident_accounts a WHERE a.user_id=users.user_id) residentId FROM users WHERE user_id=?", [String(req.params.id)]);
   res.json((rows as any[])[0]);
 }));
 app.put("/api/users/:id", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => {
@@ -304,6 +430,7 @@ app.put("/api/users/:id", requireAuth, requireRoles("Super Admin"), asyncRoute(a
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
+    await linkResidentAccount(connection, userId, input);
     if (input.password) {
       await connection.execute(
         "UPDATE users SET full_name=?,username=?,email=?,role=?,password_hash=?,must_change_password=0,credential_version=credential_version+1 WHERE user_id=?",
@@ -312,7 +439,8 @@ app.put("/api/users/:id", requireAuth, requireRoles("Super Admin"), asyncRoute(a
       await connection.execute("UPDATE refresh_tokens SET revoked_at=NOW() WHERE user_id=? AND revoked_at IS NULL", [userId]);
       await connection.execute("UPDATE password_reset_tokens SET used_at=NOW() WHERE user_id=? AND used_at IS NULL", [userId]);
     } else {
-      await connection.execute("UPDATE users SET full_name=?,username=?,email=?,role=? WHERE user_id=?", [input.fullName, input.username, input.email, input.role, userId]);
+      await connection.execute("UPDATE users SET full_name=?,username=?,email=?,role=?,credential_version=credential_version+1 WHERE user_id=?", [input.fullName, input.username, input.email, input.role, userId]);
+      await connection.execute("UPDATE refresh_tokens SET revoked_at=NOW() WHERE user_id=? AND revoked_at IS NULL", [userId]);
     }
     await connection.commit();
   } catch (error) {
@@ -383,30 +511,7 @@ const uploads = multer({
   )
 });
 
-function pointInsideRing(latitude: number, longitude: number, ring: number[][]) {
-  let inside = false;
-  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index++) {
-    const [x = 0, y = 0] = ring[index] ?? [];
-    const [previousX = 0, previousY = 0] = ring[previous] ?? [];
-    if (((y > latitude) !== (previousY > latitude)) && longitude < (previousX - x) * (latitude - y) / (previousY - y) + x) inside = !inside;
-  }
-  return inside;
-}
-
-function pointInsideGeometry(latitude: number, longitude: number, value: unknown) {
-  try {
-    const geometry = typeof value === "string" ? JSON.parse(value) : value as any;
-    const polygons = geometry?.type === "Polygon" ? [geometry.coordinates] : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
-    return polygons.some((polygon: number[][][]) =>
-      pointInsideRing(latitude, longitude, polygon[0] ?? [])
-      && !polygon.slice(1).some((hole) => pointInsideRing(latitude, longitude, hole))
-    );
-  } catch {
-    return false;
-  }
-}
-
-app.post("/api/flood-reports", uploads.array("photos", 5), asyncRoute(async (req, res) => {
+app.post("/api/flood-reports", requireAuth, requireValidatedResident, uploads.array("photos", 5), asyncRoute(async (req: AuthRequest, res) => {
   const input = z.object({
     reporterName: z.string().optional(),
     reporterContactInfo: z.string().optional(),
@@ -432,16 +537,16 @@ app.post("/api/flood-reports", uploads.array("photos", 5), asyncRoute(async (req
   const photos = uploadedFiles.map((file) => file.path.slice(config.uploadRoot.length).replaceAll("\\", "/"));
   const [zones] = await db.query<any[]>("SELECT zone_id,zone_name,polygon_geojson FROM zones WHERE polygon_geojson IS NOT NULL");
   const zone = zones.find((candidate) => pointInsideGeometry(input.latitude, input.longitude, candidate.polygon_geojson));
-  if (zones.length && !zone) {
+  if (!pointInsideGeometry(input.latitude, input.longitude, colaclingBoundary)) {
     await Promise.all(uploadedFiles.map((uploaded) => unlink(uploaded.path).catch(() => undefined)));
-    return res.status(400).json({ message: "The pinned location does not fall inside a configured barangay zone." });
+    return res.status(400).json({ message: "Choose a pinned location inside the Colacling boundary." });
   }
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
     await connection.execute(
-      "INSERT INTO flood_reports(report_id,tracking_code,reporter_name,reporter_contact_info,location_text,incident_type,latitude,longitude,description,photo_urls,severity_level) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-      [id, trackingCode, input.reporterName ?? null, input.reporterContactInfo ?? null, input.locationText, input.incidentType, input.latitude, input.longitude, input.description, JSON.stringify(photos), input.severityLevel]
+      "INSERT INTO flood_reports(report_id,tracking_code,reporter_user_id,reporter_name,reporter_contact_info,location_text,incident_type,latitude,longitude,description,photo_urls,severity_level) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+      [id, trackingCode, req.user!.userId, req.resident!.full_name, req.resident!.contact_number, input.locationText, input.incidentType, input.latitude, input.longitude, input.description, JSON.stringify(photos), input.severityLevel]
     );
     if (zone) await connection.execute("INSERT INTO flood_report_zones(report_id,zone_id) VALUES(?,?)", [id, zone.zone_id]);
     if (zone) await syncAutomaticRiskZones(connection, [String(zone.zone_id)]);
@@ -709,7 +814,7 @@ app.get("/api/map/live", asyncRoute(async (_req, res) => {
               FROM flood_reports WHERE status='Validated'`),
     db.query("SELECT * FROM evacuation_routes WHERE status!='Closed'")
   ]);
-  res.json({ center: { latitude: 13.7828976, longitude: 122.8852784 }, zones, riskZones, shelters, reports, routes, refreshedAt: new Date().toISOString() });
+  res.json({ boundary: colaclingBoundary, center: { latitude: 13.7828976, longitude: 122.8852784 }, zones, riskZones, shelters, reports, routes, refreshedAt: new Date().toISOString() });
 }));
 
 app.get("/api/emergency-contacts/public", asyncRoute(async (_req, res) => {
@@ -904,6 +1009,16 @@ async function validateResource(path: string, body: Record<string, any>, recordI
   }
   if (path === "evacuation-routes" && body.routeGeoJson && body.routeGeoJson.type !== "LineString" && body.routeGeoJson.type !== "MultiLineString") {
     throw new z.ZodError([{ code: "custom", path: ["routeGeoJson"], message: "Route geometry must be a GeoJSON LineString or MultiLineString" }]);
+  }
+  if (path === "shelters" && (body.latitude !== undefined || body.longitude !== undefined)) {
+    let latitude = body.latitude, longitude = body.longitude;
+    if (recordId && (latitude === undefined || longitude === undefined)) {
+      const [records] = await executor.query<any[]>('SELECT latitude,longitude FROM shelters WHERE shelter_id=?', [recordId]);
+      latitude ??= records[0]?.latitude; longitude ??= records[0]?.longitude;
+    }
+    if (latitude === null || longitude === null || latitude === '' || longitude === '' || !pointInsideGeometry(Number(latitude), Number(longitude), colaclingBoundary)) {
+      throw new z.ZodError([{code:'custom',path:['latitude'],message:'Pin the location inside the Colacling boundary.'}]);
+    }
   }
   if (path === "shelters") {
     for (const field of ["capacity", "currentOccupancy"]) if (body[field] !== undefined && (!Number.isInteger(Number(body[field])) || Number(body[field]) < 0)) {
@@ -1142,7 +1257,8 @@ app.get("/api/residents/yearly", requireAuth, requireRoles("Super Admin", "Disas
 }));
 
 app.post('/api/residents/import', requireAuth, requireRoles('Super Admin', 'Data Encoder'), asyncRoute(async (req, res) => {
-  const input = z.object({ csv: z.string().min(1).max(500_000), preview: z.boolean() }).parse(req.body);
+  const input = z.object({ csv: z.string().min(1).max(500_000), preview: z.boolean(), year: z.number().int().min(2000).max(currentResidentSnapshotYear()).default(currentResidentSnapshotYear()) }).parse(req.body);
+  const historical = input.year !== currentResidentSnapshotYear();
   let rows: Record<string, string>[];
   try { rows = parseResidentCsv(input.csv); }
   catch (error) { return res.status(400).json({ message: (error as Error).message }); }
@@ -1154,22 +1270,38 @@ app.post('/api/residents/import', requireAuth, requireRoles('Super Admin', 'Data
     const resource = resources.residents!;
     for (const row of rows) {
       const parsed = residentImportSchema.parse(row);
-      const [households] = await connection.query<any[]>('SELECT household_id FROM households WHERE household_number=? FOR UPDATE', [parsed.household_number]);
+      const [households] = await connection.query<any[]>(historical ? 'SELECT * FROM household_year_snapshots WHERE snapshot_year=? AND household_number=? FOR UPDATE' : 'SELECT h.*,z.zone_name FROM households h JOIN zones z ON z.zone_id=h.zone_id WHERE household_number=? FOR UPDATE', historical ? [input.year,parsed.household_number] : [parsed.household_number]);
+      // An archived household is authoritative; only copy a current household when none exists for that year.
+      if (historical && !households.length) {
+        const [current] = await connection.query<any[]>('SELECT h.*,z.zone_name FROM households h JOIN zones z ON z.zone_id=h.zone_id WHERE household_number=? FOR UPDATE',[parsed.household_number]);
+        households.push(...current);
+      }
       if (households.length !== 1) throw new Error('Select an existing, unique household number.');
+      if (historical && parsed.date_of_birth > `${input.year}-12-31`) throw new Error('Date of birth must not be after the selected record year.');
       const body: Record<string, any> = { householdId: households[0].household_id };
       for (const [field, column] of Object.entries(resource.fields)) if (parsed[column as keyof typeof parsed] !== undefined) body[field] = parsed[column as keyof typeof parsed];
       const key = JSON.stringify([body.householdId, body.fullName.toLowerCase(), body.dateOfBirth]);
       if (seen.has(key)) throw new Error('Duplicate resident in this CSV.');
       seen.add(key);
-      await validateResource('residents', body, undefined, connection);
-      if (!input.preview) {
+      if (historical) {
+        for (const field of ['contactNumber','emergencyContactNumber']) if (!validPhilippineContactNumber(body[field])) throw new Error('Enter a valid Philippine contact number.');
+        const [duplicates] = await connection.query<any[]>('SELECT resident_id FROM resident_year_snapshots WHERE snapshot_year=? AND household_id=? AND full_name=? AND date_of_birth=? LIMIT 1',[input.year,body.householdId,body.fullName,body.dateOfBirth]);
+        if (duplicates.length) throw new Error('Duplicate resident in the selected year.');
+        if (!input.preview) {
+          const h = households[0];
+          await connection.execute(`INSERT IGNORE INTO household_year_snapshots(snapshot_year,household_id,household_number,zone_id,zone_name,address_line,head_of_household_name,contact_number,verification_status) VALUES(?,?,?,?,?,?,?,?,?)`,[input.year,h.household_id,h.household_number,h.zone_id,h.zone_name,h.address_line,h.head_of_household_name,h.contact_number,h.verification_status]);
+          const entries = Object.entries(resource.fields).filter(([field]) => body[field] !== undefined && field !== 'householdId');
+          await connection.execute(`INSERT INTO resident_year_snapshots(snapshot_year,resident_id,household_id,household_number,zone_id,zone_name,household_address,head_of_household_name,${entries.map(([,column])=>column).join(',')},evacuation_status,record_status,source_created_at,source_updated_at) VALUES(${Array(8+entries.length).fill('?').join(',')},'Safe','Active',NOW(),NOW())`,[input.year,randomUUID(),h.household_id,h.household_number,h.zone_id,h.zone_name,h.address_line,h.head_of_household_name,...entries.map(([field])=>body[field])]);
+        }
+      } else await validateResource('residents', body, undefined, connection);
+      if (!historical && !input.preview) {
         const entries = Object.entries(resource.fields).filter(([field]) => body[field] !== undefined);
         await connection.execute(`INSERT INTO residents (resident_id,${entries.map(([, column]) => column).join(',')}) VALUES (${['?', ...entries.map(() => '?')].join(',')})`, [randomUUID(), ...entries.map(([field]) => body[field])]);
       }
       rowNumber++;
     }
     if (input.preview) await connection.rollback(); else await connection.commit();
-    res.json({ count: rows.length, message: input.preview ? `${rows.length} residents ready to import.` : `${rows.length} residents imported successfully.` });
+    res.json({ count: rows.length, message: input.preview ? `${rows.length} residents ready to import.` : `${rows.length} residents imported into ${input.year} successfully.` });
   } catch (error: any) {
     await connection.rollback();
     if (error instanceof z.ZodError || error.code === 'ER_DUP_ENTRY' || !error.code) {
@@ -1180,11 +1312,14 @@ app.post('/api/residents/import', requireAuth, requireRoles('Super Admin', 'Data
 }));
 
 app.get('/api/households/:id/details', requireAuth, requireRoles('Super Admin','Data Encoder'), asyncRoute(async (req,res)=>{
-  const [households] = await db.query<any[]>('SELECT h.household_id,h.household_number,h.head_of_household_name,h.address_line,h.contact_number,h.verification_status,h.updated_at,z.zone_name FROM households h JOIN zones z ON z.zone_id=h.zone_id WHERE h.household_id=? LIMIT 1',[String(req.params.id)]);
+  const [households] = await db.query<any[]>('SELECT h.household_id,h.household_number,h.head_of_household_name,h.address_line,h.contact_number,h.verification_status,h.updated_at,h.zone_id,z.zone_name FROM households h JOIN zones z ON z.zone_id=h.zone_id WHERE h.household_id=? LIMIT 1',[String(req.params.id)]);
   if (!households[0]) return res.status(404).json({message:'Household not found'});
   const [residents] = await db.query<any[]>('SELECT r.*,CAST(r.date_of_birth AS CHAR) date_of_birth,s.shelter_name FROM residents r LEFT JOIN shelters s ON s.shelter_id=r.evacuation_shelter_id WHERE r.household_id=? ORDER BY r.full_name',[String(req.params.id)]);
   const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-  res.json({household:households[0],members:residents.map(r=>{const risks=vulnerabilities(r,today);return {id:r.resident_id,name:r.full_name,relationship:r.relationship_to_head,status:r.evacuation_status,recordStatus:r.record_status,priority:r.priority_level,vulnerabilities:risks,...residentReadiness(r,risks),assistance:[r.can_swim==='No'?'Cannot swim':null,r.house_type==='Light materials'?'Home built from light materials':null].filter(Boolean),shelter:r.shelter_name,updatedAt:r.updated_at};})});
+  const assessment = await loadDss({});
+  const priorities = new Map([...assessment.vulnerable,...assessment.evacuation].map(p=>[p.id,p.priority]));
+  const zoneRisk = assessment.zones.find(z=>z.id===households[0].zone_id)?.risk ?? 'Low';
+  res.json({household:households[0],members:residents.map(r=>{const risks=vulnerabilities(r,today);return {id:r.resident_id,name:r.full_name,relationship:r.relationship_to_head,status:r.evacuation_status,recordStatus:r.record_status,priority:priorities.get(r.resident_id) ?? priorityFor(zoneRisk,risks.length>0,r.priority_level),manualPriority:r.priority_level,vulnerabilities:risks,...residentReadiness(r,risks),assistance:[r.can_swim==='No'?'Cannot swim':null,r.house_type==='Light materials'?'Home built from light materials':null].filter(Boolean),shelter:r.shelter_name,updatedAt:r.updated_at};})});
 }));
 
 app.get('/api/residents/:id/details',requireAuth,requireRoles('Super Admin','Data Encoder','Disaster Officer'),asyncRoute(async(req,res)=>{
@@ -1275,6 +1410,8 @@ for (const path of ["residents", "shelters", "volunteers", "evacuation-routes", 
         if(missions.length){await connection.rollback();return res.status(409).json({message:'This resident has an active rescue mission. Finish or cancel the mission before deleting the resident.'});}
         const [outcomes]=await connection.query<any[]>('SELECT resident_id FROM resident_outcomes WHERE resident_id=?',[recordId]);
         if(outcomes.length){await connection.rollback();return res.status(409).json({message:'This resident has recorded outcome history. Preserve the record; mark it inactive instead of deleting it.'});}
+        const [requests]=await connection.query<any[]>('SELECT request_id FROM assistance_requests WHERE resident_id=? LIMIT 1',[recordId]);
+        if(requests.length){await connection.rollback();return res.status(409).json({message:'This resident has check-in history. Mark the record inactive to preserve it.'});}
         const [result]=await connection.execute<any>('DELETE FROM residents WHERE resident_id=?',[recordId]);
         await connection.commit();return result.affectedRows?res.status(204).end():res.status(404).json({message:'Resident not found'});
       }catch(error){await connection.rollback();throw error;}finally{connection.release();}
@@ -1323,6 +1460,8 @@ app.delete("/api/households/:id", requireAuth, requireRoles("Super Admin", "Data
   if (Number(members.member_count) > 0) {
     return res.status(409).json({ message: `Household ${household.household_number} still has ${members.member_count} resident record(s). Reassign or delete those residents first.` });
   }
+  const [[contacts]]=await db.query<any[]>('SELECT household_id FROM household_contact_updates WHERE household_id=? LIMIT 1',[householdId]);
+  if(contacts)return res.status(409).json({message:'This household has contact history. Preserve the household record.'});
   await db.execute("DELETE FROM households WHERE household_id=?", [householdId]);
   res.status(204).end();
 }));
@@ -1397,6 +1536,7 @@ app.get("/api/dashboard/summary", requireAuth, asyncRoute(async (_req, res) => {
     (SELECT COUNT(*) FROM zones) totalZones,
     (SELECT COUNT(*) FROM flood_reports WHERE status IN ('Submitted','Under Review','Validated')) activeReports,
     (SELECT COUNT(*) FROM flood_reports WHERE status IN ('Submitted','Under Review')) pendingReports,
+    (SELECT COUNT(*) FROM assistance_requests WHERE kind='Need help' AND status!='Closed') openHelpRequests,
     (SELECT COUNT(*) FROM residents WHERE record_status='Active' AND evacuation_status='For Evacuation') forEvacuationResidents,
     (SELECT COUNT(*) FROM shelters s WHERE s.record_status='Active' AND s.status!='Unavailable' AND s.capacity>0
       AND (SELECT COUNT(*) FROM residents r WHERE r.evacuation_shelter_id=s.shelter_id AND r.evacuation_status='Evacuated' AND r.record_status='Active') >= s.capacity*0.8) nearCapacityShelters`);
@@ -1713,6 +1853,7 @@ app.use(async (error: any, req: express.Request, res: express.Response, _next: e
   const status =
     validationIssues.length ? 400 :
     error?.status === 401 ? 401 :
+    error?.status === 403 ? 403 :
     error?.type === "entity.parse.failed" ? 400 :
     ["LIMIT_FILE_SIZE", "LIMIT_FILE_COUNT"].includes(error?.code) ? 413 :
     error?.code === "ER_DUP_ENTRY" ? 409 :

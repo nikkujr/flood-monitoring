@@ -28,6 +28,7 @@ if (-not $browserRoot) { throw "Angular browser output was not found." }
 
 Copy-Item -Path (Join-Path $browserRoot "*") -Destination (Join-Path $outputRoot "public") -Recurse -Force
 Copy-Item -Path (Join-Path $backendRoot "dist") -Destination $outputRoot -Recurse -Force
+Copy-Item -Path (Join-Path $backendRoot "data") -Destination $outputRoot -Recurse -Force
 Copy-Item -Path (Join-Path $backendRoot "sql") -Destination $outputRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $backendRoot "package.json") -Destination $outputRoot
 Copy-Item -LiteralPath (Join-Path $backendRoot "package-lock.json") -Destination $outputRoot

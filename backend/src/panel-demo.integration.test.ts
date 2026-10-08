@@ -6,6 +6,7 @@ import { createAccessToken } from './auth.js';
 
 // Run against the local API. Only isolated rehearsal records are changed and removed.
 const zone = randomUUID(), household = randomUUID(), shelter = randomUUID();
+const residentUser = randomUUID();
 const residents = [randomUUID(), randomUUID()];
 const reports: string[] = [];
 const name = `Panel rehearsal ${zone}`;
@@ -14,8 +15,8 @@ try {
   assert.ok(users[0], 'An active administrator is required');
   const user = users[0];
   const headers = { authorization: `Bearer ${createAccessToken({ userId:user.user_id, username:user.username, role:user.role, credentialVersion:user.credential_version })}`, 'content-type':'application/json' };
-  const request = async (path:string, method='GET', body?:unknown, expected=200, authenticated=true) => {
-    const response = await fetch(`http://localhost:${config.port}/api/${path}`, {method, headers:authenticated?headers:{'content-type':'application/json'}, body:body===undefined?undefined:JSON.stringify(body)});
+  const request = async (path:string, method='GET', body?:unknown, expected=200, authenticated:boolean|string=true) => {
+    const response = await fetch(`http://localhost:${config.port}/api/${path}`, {method, headers:typeof authenticated==='string'?{...headers,authorization:`Bearer ${authenticated}`}:authenticated?headers:{'content-type':'application/json'}, body:body===undefined?undefined:JSON.stringify(body)});
     const text = await response.text();
     assert.equal(response.status, expected, `${method} ${path}: ${text}`);
     return text ? JSON.parse(text) : undefined;
@@ -23,13 +24,16 @@ try {
   await db.execute('INSERT INTO zones(zone_id,zone_name,polygon_geojson) VALUES(?,?,?)', [zone,name,JSON.stringify({type:'Polygon',coordinates:[[[.9,.9],[1.1,.9],[1.1,1.1],[.9,1.1],[.9,.9]]]})]);
   await db.execute('INSERT INTO households(household_id,household_number,zone_id,address_line,head_of_household_name) VALUES(?,?,?,?,?)',[household,name,zone,'Rehearsal only','Fictional household']);
   for (const [index,id] of residents.entries()) await db.execute("INSERT INTO residents(resident_id,household_id,full_name,date_of_birth,sex,address_line,evacuation_status) VALUES(?,?,?,'1950-01-01','Female','Rehearsal only','Safe')",[id,household,`Fictional rehearsal resident ${index+1}`]);
+  await db.execute("UPDATE households SET verification_status='Verified' WHERE household_id=?",[household]);
+  await db.execute("INSERT INTO users(user_id,full_name,username,email,password_hash,role) VALUES(?,?,?,?,?,'Resident')",[residentUser,'Fictional rehearsal resident',residentUser,`${residentUser}@example.test`,'Unused test credential']);
+  await db.execute('INSERT INTO resident_accounts(user_id,resident_id) VALUES(?,?)',[residentUser,residents[0]!]);
+  const residentToken=createAccessToken({userId:residentUser,username:residentUser,role:'Resident',credentialVersion:0});
   await db.execute('INSERT INTO shelters(shelter_id,shelter_name,zone_id,location_text,latitude,longitude,capacity,contact_person,contact_number) VALUES(?,?,?,?,1,1,1,?,?)',[shelter,name,zone,'Rehearsal only','Fictional contact','09123456789']);
   const assessment = () => request(`statistics/dss?zone=${zone}`);
   assert.equal((await assessment()).overall.risk,'Low');
   for (let i=0;i<2;i++) {
-    const submitted = await request('flood-reports','POST',{reporterName:'Fictional reporter',reporterContactInfo:'09123456789',locationText:'Rehearsal only',latitude:1,longitude:1,incidentType:'River Flooding',severityLevel:i===0?'Major Incident':'Information',description:'Temporary panel workflow check'},201,false);
+    const submitted = await request('flood-reports','POST',{locationText:'Rehearsal only',latitude:13.7828976,longitude:122.8852784,incidentType:'River Flooding',severityLevel:i===0?'Major Incident':'Information',description:'Temporary panel workflow check'},201,residentToken);
     reports.push(submitted.reportId);
-    assert.equal(submitted.zoneId,zone);
     assert.equal(submitted.status,'Submitted');
     const publicFeed = await request(`flood-reports/public?search=${submitted.trackingCode}`,'GET',undefined,200,false);
     assert.equal(publicFeed.items.length,0,'Unverified reports must not be public');
@@ -85,6 +89,8 @@ try {
   assert.equal((await assessment()).shelters[0].available,1);
   console.log('PASS: public submission → verification → High/Critical assessment → recommendations → individual/bulk marking → capacity protection → shelter assignment/history → return home; dashboard and DSS agree.');
 } finally {
+  await db.execute('DELETE FROM resident_accounts WHERE user_id=?',[residentUser]);
+  await db.execute('DELETE FROM users WHERE user_id=?',[residentUser]);
   if (reports.length) {
     await db.query('DELETE FROM flood_report_zones WHERE report_id IN (?)',[reports]);
     await db.query('DELETE FROM flood_reports WHERE report_id IN (?)',[reports]);

@@ -1,12 +1,16 @@
 import { AfterViewInit, Component, ElementRef, EventEmitter, Input, OnChanges, OnDestroy, Output, ViewChild } from '@angular/core';
 import * as L from 'leaflet';
+import {assessedZoneFill} from './map-zone-style';
 import { environment } from '../environments/environment';
 
 @Component({
   selector: 'app-polygon-editor',
   standalone: true,
   template: `
-    <div class="polygon-help">Press Start drawing, then click around the boundary. Add at least three points; the shape closes automatically.</div>
+    @if (selectExisting) {
+      <label>Barangay zone<select #zoneSelection (change)="selectZone(zoneSelection.value)"><option value="">Select an existing zone</option>@for (zone of existingZones; track zone['zone_id']) {<option [value]="zone['zone_id']" [selected]="selectedZoneId === zone['zone_id']">{{zone['zone_name']}}</option>}</select></label>
+      <div class="polygon-help">Select a zone on the map or from the list to use its saved boundary.</div>
+    } @else {<div class="polygon-help">The saved boundary is preserved. Start drawing only when changing the boundary.</div>}
     <div class="polygon-map-wrap">
       <div class="polygon-map" [id]="mapId" aria-label="Polygon boundary editor"></div>
       <div class="boundary-key"><i></i> Official Colacling, Lupi boundary</div>
@@ -17,12 +21,12 @@ import { environment } from '../environments/environment';
       }
     </div>
     <input #polygonPayload type="hidden" [name]="name" [value]="geoJson" />
-    <div class="polygon-actions">
+    @if (!selectExisting) {<div class="polygon-actions">
       <span>{{ points.length }} boundary points</span>
       <button type="button" class="draw-toggle" (click)="drawing = !drawing">{{ drawing ? 'Finish drawing' : 'Start drawing' }}</button>
       <button type="button" (click)="undo()" [disabled]="!points.length">Undo point</button>
       <button type="button" (click)="clear()" [disabled]="!points.length">Clear</button>
-    </div>
+    </div>}
   `,
   styles: [`
     :host{display:block}.polygon-help{font-size:9px;font-weight:500;color:var(--muted);margin-bottom:7px}
@@ -38,6 +42,9 @@ import { environment } from '../environments/environment';
 export class PolygonEditorComponent implements AfterViewInit, OnChanges, OnDestroy {
   @Output() changed = new EventEmitter<void>();
   @ViewChild('polygonPayload') private polygonPayload?: ElementRef<HTMLInputElement>;
+  @Input() selectExisting = false;
+  selectedZoneId = '';
+  private savedGeometry: any;
   @Input() name = 'polygonGeoJson';
   @Input() value: unknown = '';
   @Input() existingZones: Array<Record<string, unknown>> = [];
@@ -46,7 +53,7 @@ export class PolygonEditorComponent implements AfterViewInit, OnChanges, OnDestr
   geoJson = '';
   drawing = false;
   private map?: L.Map;
-  private shape?: L.Polygon;
+  private shape?: L.Polygon | L.GeoJSON;
   private officialBoundary?: L.GeoJSON;
   private existingZoneLayer = L.layerGroup();
 
@@ -77,7 +84,7 @@ export class PolygonEditorComponent implements AfterViewInit, OnChanges, OnDestr
   }
 
   private loadOfficialBoundary() {
-    const query = 'https://ulap-nga.georisk.gov.ph/arcgis/rest/services/PSA/BarangayPopMF/MapServer/0/query?geometry=122.8852784%2C13.7828976&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=true&f=geojson';
+    const query = '/colacling-boundary.geojson';
     fetch(query)
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((collection: GeoJSON.FeatureCollection) => {
@@ -100,8 +107,8 @@ export class PolygonEditorComponent implements AfterViewInit, OnChanges, OnDestr
         const geo = typeof value === 'string' ? JSON.parse(value) : value;
         const color = /^#[0-9a-f]{6}$/i.test(String(zone['zone_color'] ?? '')) ? String(zone['zone_color']) : '#64748b';
         L.geoJSON(geo as any, {
-          style: { color, fill: false, weight: 3, dashArray: '6 4' }
-        }).bindTooltip(String(zone['zone_name'] ?? 'Existing zone')).addTo(this.existingZoneLayer);
+          style: { color, ...(this.selectExisting ? assessedZoneFill(zone) : {fill:false}), weight: 3, dashArray: '6 4' }
+        }).bindTooltip(String(zone['zone_name'] ?? 'Existing zone')).on('click', () => { if (this.selectExisting) this.selectZone(String(zone['zone_id'])); }).addTo(this.existingZoneLayer);
       } catch {
         continue;
       }
@@ -127,22 +134,31 @@ export class PolygonEditorComponent implements AfterViewInit, OnChanges, OnDestr
     this.updateValue();
   }
 
+  selectZone(id: string) {
+    const zone = this.existingZones.find(z => z['zone_id'] === id);
+    if (!zone) return;
+    this.selectedZoneId = id;
+    this.value = zone['polygon_geojson'];
+    this.readValue(); this.render(); this.changed.emit();
+  }
+
   private readValue() {
+    this.points = []; this.geoJson = ''; this.savedGeometry = undefined;
     if (!this.value) return;
     try {
       const geo = typeof this.value === 'string' ? JSON.parse(this.value) : this.value as any;
-      if (geo?.type !== 'Polygon' || !Array.isArray(geo.coordinates?.[0])) return;
-      const ring = geo.coordinates[0] as Array<[number, number]>;
-      const withoutClosingPoint = ring.length > 1 && ring[0]?.[0] === ring.at(-1)?.[0] && ring[0]?.[1] === ring.at(-1)?.[1] ? ring.slice(0, -1) : ring;
-      this.points = withoutClosingPoint.map(([lng, lat]) => L.latLng(lat, lng));
-      this.updateGeoJson();
-    } catch {
-      this.points = [];
-      this.geoJson = '';
-    }
+      if (!['Polygon','MultiPolygon'].includes(geo?.type)) return;
+      this.savedGeometry = geo;
+      this.geoJson = JSON.stringify(geo);
+      const ring = (geo.type === 'Polygon' ? geo.coordinates[0] : geo.coordinates[0]?.[0]) ?? [];
+      const open = ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1] ? ring.slice(0,-1) : ring;
+      this.points = open.map(([lng,lat]:number[]) => L.latLng(lat!,lng!));
+      if (this.polygonPayload) this.polygonPayload.nativeElement.value = this.geoJson;
+    } catch { this.geoJson = ''; }
   }
 
   private updateValue() {
+    this.savedGeometry = undefined;
     this.updateGeoJson();
     this.render();
     this.changed.emit();
@@ -164,7 +180,8 @@ export class PolygonEditorComponent implements AfterViewInit, OnChanges, OnDestr
     this.shape?.remove();
     this.shape = undefined;
     if (!this.points.length) return;
-    this.shape = L.polygon(this.points, { color: '#0758c7', fillColor: '#2f80d8', fillOpacity: .2, weight: 3 }).addTo(this.map);
+    const style = { color: '#0758c7', fillColor: '#2f80d8', fillOpacity: .2, weight: 3 };
+    this.shape = this.savedGeometry ? L.geoJSON(this.savedGeometry, {style}).addTo(this.map) : L.polygon(this.points, style).addTo(this.map);
     if (this.points.length >= 2) this.map.fitBounds(this.shape.getBounds(), { padding: [25, 25], maxZoom: 17 });
   }
 }

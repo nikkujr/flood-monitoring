@@ -1,0 +1,78 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { db } from './db.js';
+import { config } from './config.js';
+import { createAccessToken } from './auth.js';
+
+assert.ok(['localhost','127.0.0.1'].includes(new URL(config.databaseUrl).hostname),'Use a local test database.');
+const zone=randomUUID(),household=randomUUID(),resident=randomUUID(),other=randomUUID();
+const label=`Support check ${randomUUID()}`;
+const users=['Resident','Resident','Super Admin','Disaster Officer','Data Encoder','Secretary'].map(role=>({userId:randomUUID(),username:randomUUID(),role}));
+const tokens=users.map(user=>createAccessToken(user as any));
+async function request(path:string,method='GET',body?:unknown,token=tokens[2],expected=200){
+  const response=await fetch(`http://localhost:${config.port}/api/${path}`,{method,headers:{'content-type':'application/json',...(token?{authorization:`Bearer ${token}`}:{})},body:body===undefined?undefined:JSON.stringify(body)});
+  const data=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(data)}`);return data;
+}
+const mine='community-support/mine',requests='community-support/requests',contacts='community-support/households';
+const help={kind:'Need help',location:'Colacling test pickup',needs:'Help walking to shelter'};
+try{
+  await db.execute('INSERT INTO zones(zone_id,zone_name,polygon_geojson) VALUES(?,?,?)',[zone,label,JSON.stringify({type:'Polygon',coordinates:[[[122.884,13.782],[122.886,13.782],[122.886,13.784],[122.884,13.784],[122.884,13.782]]]})]);
+  await db.execute("INSERT INTO households(household_id,household_number,zone_id,address_line,head_of_household_name,verification_status) VALUES(?,?,?,?,?,'Verified')",[household,label,zone,'Test address',label]);
+  for(const id of [resident,other])await db.execute("INSERT INTO residents(resident_id,household_id,full_name,date_of_birth,sex,address_line) VALUES(?,?,?,'1950-01-01','Female','Test address')",[id,household,label+id.slice(0,4)]);
+  for(const user of users)await db.execute("INSERT INTO users(user_id,full_name,username,email,password_hash,role) VALUES(?,?,?,?,?,?)",[user.userId,label,user.username,`${user.username}@example.com`,'unused',user.role]);
+  for(const [index,id] of [resident,other].entries())await db.execute('INSERT INTO resident_accounts(user_id,resident_id) VALUES(?,?)',[users[index]!.userId,id]);
+  await request(mine,'GET',undefined,'',401);
+  await request(mine,'POST',help,tokens[2],403);
+  for(const index of [0,1,5])await request(requests,'GET',undefined,tokens[index],403);
+  await request(mine,'POST',{...help,residentId:other},tokens[0],400);
+  await request(mine,'POST',{...help,needs:''},tokens[0],400);
+  await db.execute("UPDATE users SET must_change_password=1 WHERE user_id=?",[users[0]!.userId]);
+  await request(mine,'POST',help,tokens[0],403);
+  await db.execute("UPDATE users SET must_change_password=0 WHERE user_id=?",[users[0]!.userId]);
+  const responses=await Promise.all([0,1].map(()=>fetch(`http://localhost:${config.port}/api/${mine}`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${tokens[0]}`},body:JSON.stringify(help)})));
+  assert.deepEqual(responses.map(r=>r.status).sort(),[201,409]);
+  const own=(await request(mine,'GET',undefined,tokens[0])).items;
+  assert.equal(own.length,1);assert.equal(own[0].resident_id,resident);
+  assert.equal((await request(mine+'?residentId='+resident,'GET',undefined,tokens[1])).items.length,0);
+  const id=own[0].request_id;
+  await request(mine,'POST',{kind:'Safe at home',location:'Test home',needs:''},tokens[0],201);
+  await request(mine,'POST',{kind:'Reached shelter',location:'Test shelter',needs:''},tokens[0],201);
+  const [[person]]=await db.query<any[]>('SELECT evacuation_status,evacuation_shelter_id FROM residents WHERE resident_id=?',[resident]);
+  assert.equal(person.evacuation_status,'Safe');assert.equal(person.evacuation_shelter_id,null);
+  const [[open]]=await db.query<any[]>("SELECT COUNT(*) n FROM assistance_requests WHERE resident_id=? AND kind='Need help' AND status!='Closed'",[resident]);assert.equal(open.n,1);
+  for(const index of [2,3,4])assert.equal((await request(requests+'?search='+encodeURIComponent(label),'GET',undefined,tokens[index])).totalItems,3);
+  await request(requests+'?page=0','GET',undefined,tokens[2],400);
+  await request(requests+'/'+id,'PUT',{status:'Closed',revision:0,note:'Unverified',confirmed:false},tokens[2],400);
+  await request(requests+'/'+id,'PUT',{status:'Acknowledged',revision:0,note:'Called the resident; coordinating assistance.',confirmed:true},tokens[4]);
+  await request(requests+'/'+id,'PUT',{status:'Closed',revision:0,note:'Stale update',confirmed:true},tokens[3],409);
+  await request(requests+'/'+id,'PUT',{status:'Closed',revision:1,note:'Assistance confirmed delivered by crew.',confirmed:true},tokens[3]);
+  await request(requests+'/'+id,'PUT',{status:'Acknowledged',revision:2,note:'Reopen',confirmed:true},tokens[2],409);
+  assert.equal((await request(requests+'/'+id)).history.length,2);
+  assert.equal((await request(mine,'GET',undefined,tokens[0])).items.find((r:any)=>r.request_id===id).review_note,'Assistance confirmed delivered by crew.');
+  await request(mine,'POST',help,tokens[0],201);
+  assert.ok((await request('dashboard/summary')).openHelpRequests>=1);
+  const initial=await request(contacts+'?search='+encodeURIComponent(label));assert.equal(initial.items.length,1);assert.equal(initial.items[0].status,'Not contacted');assert.equal(initial.items[0].revision,0);assert.equal(initial.items[0].open_requests,1);
+  const contact={status:'Needs follow-up',assignedUserId:users[4]!.userId,revision:0,note:'No answer by phone; visit needed.'};
+  await request(contacts+'/'+household,'PUT',{...contact,assignedUserId:users[0]!.userId},tokens[2],400);
+  const updates=await Promise.all([2,3].map(index=>fetch(`http://localhost:${config.port}/api/${contacts}/${household}`,{method:'PUT',headers:{'content-type':'application/json',authorization:`Bearer ${tokens[index]}`},body:JSON.stringify(contact)})));
+  assert.deepEqual(updates.map(r=>r.status).sort(),[200,409]);
+  await request(contacts+'/'+household,'PUT',{...contact,status:'Contacted',revision:1,note:'Spoke to household head in person.'},tokens[4]);
+  assert.equal((await request(contacts+'/'+household)).history.length,2);
+  const contacted=await request(contacts+'?search='+encodeURIComponent(label)+'&filter_status=Contacted');assert.equal(contacted.items[0].revision,2);assert.equal(contacted.items[0].assigned_user_id,users[4]!.userId);
+  await request('residents/'+resident,'DELETE',undefined,tokens[2],409);
+  await db.execute("UPDATE households SET verification_status='Rejected' WHERE household_id=?",[household]);
+  await request(mine,'POST',help,tokens[0],403);await request(contacts+'/'+household,'PUT',{...contact,revision:2},tokens[2],409);
+  await db.execute("UPDATE households SET verification_status='Verified' WHERE household_id=?",[household]);
+  await db.execute("UPDATE residents SET record_status='Inactive' WHERE resident_id=?",[resident]);await request(mine,'GET',undefined,tokens[0],403);
+  console.log('PASS: approved-account isolation, roles, password gate, input validation, concurrent duplicate protection, review confirmation/history/revisions, preserved operational status, contact assignment/history/concurrency and deletion protection.');
+}finally{
+  await db.execute('DELETE u FROM assistance_request_updates u JOIN assistance_requests a ON a.request_id=u.request_id WHERE a.household_id=?',[household]);
+  await db.execute('DELETE FROM assistance_requests WHERE household_id=?',[household]);
+  await db.execute('DELETE FROM household_contact_updates WHERE household_id=?',[household]);
+  await db.execute('DELETE FROM household_contacts WHERE household_id=?',[household]);
+  await db.execute('DELETE FROM resident_accounts WHERE resident_id IN (?,?)',[resident,other]);
+  for(const user of users)await db.execute('DELETE FROM users WHERE user_id=?',[user.userId]);
+  await db.execute('DELETE FROM residents WHERE resident_id IN (?,?)',[resident,other]);
+  await db.execute('DELETE FROM households WHERE household_id=?',[household]);
+  await db.execute('DELETE FROM zones WHERE zone_id=?',[zone]);await db.end();
+}

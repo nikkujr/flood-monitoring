@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(255) NOT NULL,
   must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
   credential_version INT NOT NULL DEFAULT 0,
-  role ENUM('Super Admin','Disaster Officer','Data Encoder') NOT NULL,
+  role ENUM('Super Admin','Disaster Officer','Data Encoder','Resident','Secretary') NOT NULL,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   last_login_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -111,8 +111,32 @@ CREATE TABLE IF NOT EXISTS residents (
   INDEX residents_shelter_idx (evacuation_shelter_id)
 );
 
+CREATE TABLE IF NOT EXISTS resident_registrations (
+  user_id CHAR(36) PRIMARY KEY,
+  date_of_birth DATE NOT NULL,
+  contact_number VARCHAR(30) NOT NULL,
+  address_line VARCHAR(255) NOT NULL,
+  household_number VARCHAR(80) NULL,
+  status ENUM('Pending','Approved','Rejected') NOT NULL DEFAULT 'Pending',
+  review_notes VARCHAR(1000) NULL,
+  reviewed_by_user_id CHAR(36) NULL,
+  reviewed_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+  FOREIGN KEY (reviewed_by_user_id) REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS resident_accounts (
+  user_id CHAR(36) PRIMARY KEY,
+  resident_id CHAR(36) NOT NULL UNIQUE,
+  FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+  FOREIGN KEY (resident_id) REFERENCES residents(resident_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS flood_reports (
   report_id CHAR(36) PRIMARY KEY,
+  reporter_user_id CHAR(36) NULL,
+  FOREIGN KEY (reporter_user_id) REFERENCES users(user_id) ON DELETE SET NULL,
   tracking_code VARCHAR(32) NOT NULL UNIQUE,
   reporter_name VARCHAR(160) NULL,
   reporter_contact_info VARCHAR(190) NULL,
@@ -407,4 +431,83 @@ CREATE TABLE IF NOT EXISTS resident_outcome_updates (
   observed_at DATETIME NOT NULL,
   recorded_by_user_id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS response_actions (
+  source_key VARCHAR(60) PRIMARY KEY,
+  target_label VARCHAR(255) NOT NULL,
+  priority VARCHAR(20) NOT NULL,
+  response_action TEXT NOT NULL,
+  basis TEXT NOT NULL,
+  team_id CHAR(36) NULL,
+  status ENUM('For Review','Pending','In Progress','Completed') NOT NULL DEFAULT 'For Review',
+  latest_update VARCHAR(1000) NOT NULL DEFAULT 'Awaiting official review',
+  revision INT NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (team_id) REFERENCES rescue_teams(team_id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS response_action_updates (
+  update_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  source_key VARCHAR(60) NOT NULL,
+  team_id CHAR(36) NULL,
+  status VARCHAR(30) NOT NULL,
+  note VARCHAR(1000) NOT NULL,
+  recorded_by_user_id CHAR(36) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (source_key) REFERENCES response_actions(source_key),
+  FOREIGN KEY (team_id) REFERENCES rescue_teams(team_id) ON DELETE SET NULL,
+  FOREIGN KEY (recorded_by_user_id) REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS assistance_requests (
+  request_id CHAR(36) PRIMARY KEY,
+  resident_id CHAR(36) NOT NULL,
+  household_id CHAR(36) NOT NULL,
+  submitted_by_user_id CHAR(36) NULL,
+  kind ENUM('Need help','Safe at home','Reached shelter') NOT NULL,
+  location VARCHAR(500) NOT NULL,
+  needs VARCHAR(1000) NOT NULL,
+  status ENUM('Submitted','Acknowledged','Closed') NOT NULL DEFAULT 'Submitted',
+  review_note VARCHAR(1000) NOT NULL DEFAULT '',
+  revision INT NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX assistance_resident (resident_id,created_at),
+  INDEX assistance_household (household_id,status),
+  FOREIGN KEY (resident_id) REFERENCES residents(resident_id),
+  FOREIGN KEY (household_id) REFERENCES households(household_id),
+  FOREIGN KEY (submitted_by_user_id) REFERENCES users(user_id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS assistance_request_updates (
+  update_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  request_id CHAR(36) NOT NULL,
+  status VARCHAR(30) NOT NULL,
+  note VARCHAR(1000) NOT NULL,
+  recorded_by_user_id CHAR(36) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  FOREIGN KEY (request_id) REFERENCES assistance_requests(request_id),
+  FOREIGN KEY (recorded_by_user_id) REFERENCES users(user_id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS household_contacts (
+  household_id CHAR(36) PRIMARY KEY,
+  status ENUM('Not contacted','Contacted','Needs follow-up') NOT NULL,
+  assigned_user_id CHAR(36) NULL,
+  note VARCHAR(1000) NOT NULL,
+  revision INT NOT NULL,
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  FOREIGN KEY (household_id) REFERENCES households(household_id),
+  FOREIGN KEY (assigned_user_id) REFERENCES users(user_id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS household_contact_updates (
+  update_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  household_id CHAR(36) NOT NULL,
+  status VARCHAR(30) NOT NULL,
+  assigned_user_id CHAR(36) NULL,
+  note VARCHAR(1000) NOT NULL,
+  recorded_by_user_id CHAR(36) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  FOREIGN KEY (household_id) REFERENCES households(household_id),
+  FOREIGN KEY (assigned_user_id) REFERENCES users(user_id) ON DELETE SET NULL,
+  FOREIGN KEY (recorded_by_user_id) REFERENCES users(user_id) ON DELETE SET NULL
 );

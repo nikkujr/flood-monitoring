@@ -1,5 +1,22 @@
 @if (sessionResolving) {
   <div class="session-loader flood-loader" role="status"><span class="flood-loader-icon"><img src="barangay-colacling-seal.png" alt="" /><i></i><i></i><i></i></span><p>Loading BantayBaha…</p></div>
+} @else if (!api.user() && publicPage === 'register') {
+  <section class="public-page">
+    <div class="page-heading"><div><span class="eyebrow">RESIDENT REGISTRATION</span><h1>Create your account</h1><p>You can sign in only after the barangay secretary validates your identity and household and approves your account.</p></div></div>
+    <form class="report-form public-card" (submit)="registerResident($event)">
+      <label>Full name<input name="fullName" autocomplete="name" required minlength="2" maxlength="160" />@if(fieldErrors['fullName']){<small class="field-error" role="alert">{{fieldErrors['fullName']}}</small>}</label>
+      <label>Date of birth<input name="dateOfBirth" type="date" autocomplete="bday" required [max]="registrationToday" />@if(fieldErrors['dateOfBirth']){<small class="field-error" role="alert">{{fieldErrors['dateOfBirth']}}</small>}</label>
+      <label>Contact number<input name="contactNumber" type="tel" autocomplete="tel" required minlength="7" maxlength="30" />@if(fieldErrors['contactNumber']){<small class="field-error" role="alert">{{fieldErrors['contactNumber']}}</small>}</label>
+      <label>Email<input name="email" type="email" autocomplete="email" required maxlength="190" />@if(fieldErrors['email']){<small class="field-error" role="alert">{{fieldErrors['email']}}</small>}</label>
+      <label class="wide">Residential address<input name="addressLine" autocomplete="street-address" required minlength="5" maxlength="255" />@if(fieldErrors['addressLine']){<small class="field-error" role="alert">{{fieldErrors['addressLine']}}</small>}</label>
+      <label>Household number (if known)<input name="householdNumber" maxlength="80" /></label>
+      <label>Username<input name="username" autocomplete="username" required minlength="3" maxlength="80" />@if(fieldErrors['username']){<small class="field-error" role="alert">{{fieldErrors['username']}}</small>}</label>
+      <label>Password<input name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="128" /><small>12+ characters with uppercase, lowercase and a number.</small>@if(fieldErrors['password']){<small class="field-error" role="alert">{{fieldErrors['password']}}</small>}</label>
+      <label>Confirm password<input name="confirmation" type="password" autocomplete="new-password" required minlength="12" maxlength="128" />@if(fieldErrors['confirmation']){<small class="field-error" role="alert">{{fieldErrors['confirmation']}}</small>}</label>
+      @if(errorMessage){<p class="form-error wide" role="alert">{{errorMessage}}</p>}
+      <button class="primary" type="submit" [disabled]="loginLoading">{{loginLoading ? 'Creating account…' : 'Register for approval'}}</button><button class="secondary" type="button" (click)="navigatePublic('login')">Already registered? Sign in</button>
+    </form>
+  </section>
 } @else if (!api.user() && publicPage === 'login') {
   <section class="login-page">
     <div class="login-visual">
@@ -10,13 +27,14 @@
 
     <div class="login-form-wrap">
       <form class="login-card" (submit)="login($event, username.value, password.value)" novalidate>
-        <span class="eyebrow">AUTHORIZED ACCESS</span><h2>Welcome back</h2><p>Sign in using your local authority account.</p>
+        <span class="eyebrow">AUTHORIZED ACCESS</span><h2>Welcome back</h2><p>Sign in using your resident or local authority account.</p>
         <label>Username<input #username name="username" autocomplete="username" placeholder="Enter your username" required [attr.aria-invalid]="!!fieldErrors['username']" />@if (fieldErrors['username']) { <small class="field-error" role="alert">{{ fieldErrors['username'] }}</small> }</label>
         <label>Password<div class="password-field"><input #password name="password" [type]="showPassword ? 'text' : 'password'" autocomplete="current-password" placeholder="Enter your password" required [attr.aria-invalid]="!!fieldErrors['password']" /><button class="password-toggle" type="button" (click)="showPassword = !showPassword" [attr.aria-label]="showPassword ? 'Hide password' : 'Show password'" [attr.title]="showPassword ? 'Hide password' : 'Show password'"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">@if (showPassword) { <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z"/><circle cx="12" cy="12" r="3"/> } @else { <path d="M3 3l18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.9 4.2A10.8 10.8 0 0 1 12 4c5 0 8.3 4.1 9.5 6-0.5.8-1.2 1.8-2.1 2.7"/><path d="M6.6 6.6C4.7 7.9 3.5 9.6 2.5 11.2 3.7 13.1 7 17 12 17c1.1 0 2.1-.2 3-.6"/> }</svg></button></div>@if (fieldErrors['password']) { <small class="field-error" role="alert">{{ fieldErrors['password'] }}</small> }</label>
         @if (errorMessage) { <div class="form-error" role="alert">{{ errorMessage }}</div> }
         @if (successMessage) { <div class="success-message">{{ successMessage }}</div> }
         <button class="primary full" type="submit" [disabled]="loginLoading">{{ loginLoading ? 'Connecting…' : 'Sign in securely' }}</button>
         <button class="forgot-link" type="button" (click)="recoveryOpen = true">Forgot password?</button>
+        <button class="secondary full" type="button" (click)="navigatePublic('register')">Create resident account</button>
       </form>
     </div>
   </section>
@@ -55,7 +73,7 @@
       </form>
     </div>
   </section>
-} @else if (!api.user()) {
+} @else if (!api.user() || isResident) {
   <div class="public-shell">
     <header class="public-nav">
       <button class="public-brand" (click)="navigatePublic('home')"><span><img src="barangay-colacling-seal.png" alt="Barangay Colacling seal" /></span><div><strong>BantayBaha</strong><small>Barangay Colacling</small></div></button>
@@ -63,12 +81,102 @@
         <button [class.active]="publicPage === 'home'" (click)="navigatePublic('home')">Home</button>
         <button [class.active]="publicPage === 'map'" (click)="navigatePublic('map')">Live Map</button>
         <button [class.active]="publicPage === 'report'" (click)="navigatePublic('report')">Flood Reports</button>
+        @if (isResident) { <button [class.active]="publicPage === 'account'" (click)="navigatePublic('account')">My Account</button> }
       </nav>
-      <button class="secondary" (click)="navigatePublic('login')">Authority login</button>
+      @if (isResident) { <button class="secondary" (click)="logout()">Sign out</button> } @else { <button class="secondary" (click)="navigatePublic('register')">Register</button><button class="secondary" (click)="navigatePublic('login')">Sign in</button> }
       <label class="theme-selector">Theme <select [ngModel]="theme" (ngModelChange)="setTheme($event)" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
     </header>
 
-    @if (publicPage === 'home') {
+    @if (publicPage === 'account') {
+      <section class="public-page account-page">
+        <div class="page-heading account-heading"><div><span class="eyebrow">RESIDENT ACCOUNT</span><h1>My Account</h1><p>Manage your personal information and account.</p></div><div class="account-actions">@if(account?.resident){<span class="account-status">✓ Approved resident</span>@if(!accountProfileEditing){<button type="button" class="primary" (click)="editAccountProfile(); accountPersonalCard.open = true" [disabled]="accountProfileBusy || accountLoading">✎ Edit my information</button>}}</div></div>
+
+        @if (accountLoading) { <p role="status">Loading your information…</p> }
+        @if (accountError) { <p class="form-error" role="alert">{{accountError}}</p><button class="secondary" (click)="loadAccount()">Retry</button> }
+        @if (account?.registration; as registration) {
+          @if(registration['status'] !== 'Approved'){
+          <article class="public-card"><h2>Registration: {{registration['status']}}</h2>
+            @if(registration['status'] === 'Pending'){<p role="status">Your registration is awaiting validation and approval by the barangay secretary. Flood reporting will be available after approval.</p>}
+            @if(registration['status'] === 'Rejected'){<p role="alert">Your registration was rejected. Contact the barangay secretary to resolve the issue.</p>}
+            @if(registration['review_notes']){<p>Secretary notes: {{registration['review_notes']}}</p>}
+            <button class="secondary" (click)="loadAccount()">Refresh approval status</button>
+          </article>
+          } @else if(registration['review_notes']){<details class="account-note"><summary>Registration review notes</summary><p>{{registration['review_notes']}}</p></details>}
+        }
+        <div class="account-tabs" role="tablist" aria-label="My Account sections" (keydown)="accountTabKey($event)">
+          @for(tab of accountTabs;track tab.id){<button type="button" role="tab" [id]="'account-tab-'+tab.id" [attr.aria-controls]="'account-panel-'+tab.id" [attr.aria-selected]="accountTab === tab.id" [attr.tabindex]="accountTab === tab.id ? 0 : -1" [disabled]="accountProfileBusy || loginLoading" (click)="accountTab = tab.id">{{tab.label}}</button>}
+        </div>
+        <section class="account-tab-panel" id="account-panel-profile" role="tabpanel" aria-labelledby="account-tab-profile" [hidden]="accountTab !== 'profile'" tabindex="0">
+        <details #accountPersonalCard open class="public-card account-personal"><summary>Personal information</summary>
+
+          @if (account?.resident; as r) {
+            @if(accountProfileEditing){
+              <form (submit)="saveAccountProfile($event)">
+                <fieldset class="report-form" [disabled]="accountProfileBusy"><legend>Edit personal information</legend>
+                    <label>Full name<input name="profileFullName" [(ngModel)]="accountProfile['fullName']" autocomplete="name" required minlength="2" maxlength="160" />@if(accountProfileFieldErrors['fullName']){<small class="field-error">{{accountProfileFieldErrors['fullName']}}</small>}</label>
+                    <label>Date of birth<input name="profileDateOfBirth" type="date" [(ngModel)]="accountProfile['dateOfBirth']" autocomplete="bday" required [max]="registrationToday" />@if(accountProfileFieldErrors['dateOfBirth']){<small class="field-error">{{accountProfileFieldErrors['dateOfBirth']}}</small>}</label>
+                    <label>Sex<select name="profileSex" [(ngModel)]="accountProfile['sex']" required><option>Female</option><option>Male</option><option>Intersex</option><option>Prefer not to say</option><option>Not recorded</option></select></label>
+                    <label>Email<input name="profileEmail" type="email" [(ngModel)]="accountProfile['email']" autocomplete="email" required maxlength="190" />@if(accountProfileFieldErrors['email']){<small class="field-error">{{accountProfileFieldErrors['email']}}</small>}</label>
+                    <label>Contact number<input name="profileContactNumber" type="tel" [(ngModel)]="accountProfile['contactNumber']" autocomplete="tel" maxlength="30" />@if(accountProfileFieldErrors['contactNumber']){<small class="field-error">{{accountProfileFieldErrors['contactNumber']}}</small>}</label>
+                    <label class="wide">Residential address<input name="profileAddress" [(ngModel)]="accountProfile['addressLine']" autocomplete="street-address" required minlength="5" maxlength="255" />@if(accountProfileFieldErrors['addressLine']){<small class="field-error">{{accountProfileFieldErrors['addressLine']}}</small>}</label>
+                    <label>Marital status<select name="profileMaritalStatus" [(ngModel)]="accountProfile['maritalStatus']"><option value="">Not recorded</option><option>Single</option><option>Married</option><option>Widow</option></select></label>
+                    <label>Occupation<input name="profileOccupation" [(ngModel)]="accountProfile['occupation']" maxlength="160" /></label>
+                    <label>Education<input name="profileEducation" [(ngModel)]="accountProfile['education']" maxlength="160" /></label>
+                    <label>Emergency contact name<input name="profileEmergencyName" [(ngModel)]="accountProfile['emergencyContactName']" maxlength="160" /></label>
+                    <label>Emergency contact number<input name="profileEmergencyNumber" type="tel" [(ngModel)]="accountProfile['emergencyContactNumber']" maxlength="30" />@if(accountProfileFieldErrors['emergencyContactNumber']){<small class="field-error">{{accountProfileFieldErrors['emergencyContactNumber']}}</small>}</label>
+                    <details class="wide account-details" open><summary>Government identifiers</summary><div class="account-edit-fields">
+                      <label>PhilSys Number<input name="profilePhilSys" [(ngModel)]="accountProfile['philsysNumber']" maxlength="80" autocomplete="off" /></label>
+                      <label>PhilHealth Number<input name="profilePhilHealth" [(ngModel)]="accountProfile['philhealthNumber']" maxlength="80" autocomplete="off" /></label>
+                    </div></details>
+                    <details class="wide account-details" open><summary>Home & personal circumstances</summary><div class="account-edit-fields">
+                      <label>Sanitary Toilet<select name="profileSanitaryToilet" [(ngModel)]="accountProfile['sanitaryToilet']"><option value="">Not recorded</option><option value="With">With sanitary toilet</option><option value="Without">Without sanitary toilet</option></select></label>
+                      <label>Type of House<select name="profileHouseType" [(ngModel)]="accountProfile['houseType']"><option value="">Not recorded</option><option>Concrete</option><option>Semi concrete</option><option>Light materials</option></select></label>
+                      <label>PWD (specify)<input name="profilePwd" [(ngModel)]="accountProfile['pwdSpecify']" maxlength="160" /><small>Describe the disability, if applicable. Leave blank if none.</small></label>
+                      <label>Can swim?<select name="profileCanSwim" [(ngModel)]="accountProfile['canSwim']"><option value="">Not recorded</option><option>Yes</option><option>No</option></select></label>
+                      <label>Solo Parent?<select name="profileSoloParent" [(ngModel)]="accountProfile['soloParent']"><option value="">Not recorded</option><option>Yes</option><option>No</option></select></label>
+                    </div></details>
+                </fieldset>
+                @if(accountProfileError){<p class="form-error wide" role="alert">{{accountProfileError}}</p>}
+                <div class="modal-actions wide"><button type="button" class="secondary" [disabled]="accountProfileBusy" (click)="accountProfileEditing = false">Cancel</button><button type="submit" class="primary" [disabled]="accountProfileBusy">{{accountProfileBusy ? 'Saving…' : 'Save information'}}</button></div>
+              </form>
+            } @else {
+            <div class="household-facts"><span><b>Full name</b>{{r['full_name']}}</span><span><b>Date of birth</b>{{r['date_of_birth'] | date:'mediumDate'}}</span><span><b>Sex</b>{{r['sex']}}</span><span><b>Contact number</b>{{r['contact_number'] || 'Not recorded'}}</span><span><b>Address</b>{{r['address_line']}}</span><span><b>Email</b>{{api.user()?.email}}</span></div>
+            <details class="account-details"><summary>More personal details & emergency contacts</summary>
+            <div class="household-facts"><span><b>Marital status</b>{{r['marital_status'] || 'Not recorded'}}</span><span><b>Occupation</b>{{r['occupation'] || 'Not recorded'}}</span><span><b>Education</b>{{r['education'] || 'Not recorded'}}</span><span><b>Emergency contact</b>{{r['emergency_contact_name'] || 'Not recorded'}}</span><span><b>Emergency contact number</b>{{r['emergency_contact_number'] || 'Not recorded'}}</span></div>
+            </details>
+            <details class="account-details"><summary>Government identifiers</summary><div class="household-facts"><span><b>PhilSys Number</b>{{r['philsys_number'] || 'Not recorded'}}</span><span><b>PhilHealth Number</b>{{r['philhealth_number'] || 'Not recorded'}}</span></div></details>
+            <details class="account-details"><summary>Home & personal circumstances</summary><div class="household-facts"><span><b>Sanitary Toilet</b>{{r['sanitary_toilet'] || 'Not recorded'}}</span><span><b>Type of House</b>{{r['house_type'] || 'Not recorded'}}</span><span><b>PWD (specify)</b>{{r['pwd_specify'] || 'Not recorded'}}</span><span><b>Can swim?</b>{{r['can_swim'] || 'Not recorded'}}</span><span><b>Solo Parent?</b>{{r['solo_parent'] || 'Not recorded'}}</span></div></details>
+            }
+            @if(accountProfileSuccess){<p class="success-message" role="status">{{accountProfileSuccess}}</p>}
+
+          } @else if (account?.registration; as registration) {
+            <div class="household-facts"><span><b>Submitted full name</b>{{api.user()?.fullName}}</span><span><b>Date of birth</b>{{registration['date_of_birth'] | date:'mediumDate'}}</span><span><b>Contact number</b>{{registration['contact_number']}}</span><span><b>Address</b>{{registration['address_line']}}</span><span><b>Submitted household number</b>{{registration['household_number'] || 'Not provided'}}</span></div>
+          } @else if (!accountLoading && !accountError) { <p>Your account has no linked resident record. Contact the barangay to update it.</p> }
+
+        </details>
+        </section>
+        <section class="account-tab-panel" id="account-panel-household" role="tabpanel" aria-labelledby="account-tab-household" [hidden]="accountTab !== 'household'" tabindex="0">
+        @if(account?.resident;as r){
+          <details open class="public-card account-household"><summary>My household</summary><div class="household-facts"><span><b>Household number</b>{{r['household_number']}}</span><span><b>Zone</b>{{r['zone_name']}}</span><span><b>Head of household</b>{{r['head_of_household_name']}}</span><span><b>Verification</b>{{r['verification_status']}}</span></div><details class="account-details"><summary>Household details</summary><div class="household-facts"><span><b>Relationship to head</b>{{r['relationship_to_head'] || 'Not recorded'}}</span><span><b>Household address</b>{{r['household_address']}}</span></div><p>Contact the barangay to change your household membership.</p></details></details>
+        }
+        </section>
+        <section class="account-tab-panel" id="account-panel-assistance" role="tabpanel" aria-labelledby="account-tab-assistance" [hidden]="accountTab !== 'assistance'" tabindex="0">
+        @if(account?.resident){<details open class="public-card account-security"><summary>Check in or request help <span>Send an update to barangay staff</span></summary>@defer (on immediate){<app-community-support [resident]="true"></app-community-support>}</details>}
+        </section>
+        <section class="account-tab-panel" id="account-panel-security" role="tabpanel" aria-labelledby="account-tab-security" [hidden]="accountTab !== 'security'" tabindex="0">
+        <details open class="public-card account-security"><summary>Account security <span>Change your password</span></summary>
+          <div class="household-facts"><span><b>Username</b>{{api.user()?.username}}</span></div>
+          <form class="report-form" (submit)="changeTemporaryPassword($event, accountCurrent.value, accountNew.value, accountConfirm.value)" novalidate>
+            <label>Current password<input #accountCurrent name="currentPassword" type="password" autocomplete="current-password" required />@if(fieldErrors['currentPassword']){<small class="field-error" role="alert">{{fieldErrors['currentPassword']}}</small>}</label>
+            <label>New password<input #accountNew name="newPassword" type="password" autocomplete="new-password" minlength="12" required /><small>12+ characters with uppercase, lowercase and a number.</small>@if(fieldErrors['newPassword']){<small class="field-error" role="alert">{{fieldErrors['newPassword']}}</small>}</label>
+            <label>Confirm new password<input #accountConfirm name="confirmation" type="password" autocomplete="new-password" required />@if(fieldErrors['confirmation']){<small class="field-error" role="alert">{{fieldErrors['confirmation']}}</small>}</label>
+            @if(errorMessage){<p class="form-error" role="alert">{{errorMessage}}</p>} @if(successMessage){<p class="success-message" role="status">{{successMessage}}</p>}
+            <button class="primary" type="submit" [disabled]="loginLoading">{{loginLoading ? 'Updating…' : 'Change password'}}</button>
+          </form>
+        </details>
+        </section>
+      </section>
+    } @else if (publicPage === 'home') {
       @if (weather; as w) {
         <section class="public-weather-wrap">
           <article class="weather-panel public-weather" aria-label="Current weather in Colacling">
@@ -180,6 +288,10 @@
       <section class="public-page report-page">
         <div class="page-heading"><div><span class="eyebrow">COMMUNITY REPORTING</span><h1>Report a flood incident</h1><p>Your report will enter the local authority validation queue before appearing publicly.</p></div></div>
         @if (errorMessage) { <div class="connection-error" role="alert">{{ errorMessage }}</div> }
+        @if (!api.user()) { <article class="public-card"><p>Sign in with an approved resident account to submit a flood report. New residents can register for secretary validation.</p><button class="primary" (click)="navigatePublic('login')">Sign in to report</button> <button class="secondary" (click)="navigatePublic('register')">Create resident account</button></article> }
+        @else if (accountLoading) { <p role="status">Checking resident validation…</p> }
+        @else if (!canSubmitResidentReport) { <article class="public-card"><p role="alert">{{accountError || 'Your active resident record must belong to a verified household before you can report flooding. Contact the barangay for validation.'}}</p><button class="secondary" (click)="loadAccount()">Check again</button></article> }
+        @if (canSubmitResidentReport) {
         @if (publicDraftPending) {<aside class="draft-notice"><b>Resume your unfinished report?</b><p>Saved {{publicDraft?.updatedAt | date:'medium'}} in this browser.</p><button class="primary" type="button" (click)="resumePublicDraft()">Resume draft</button> <button class="secondary" type="button" (click)="clearPublicDraft(publicReportForm,reportLocationPicker)">Discard draft</button></aside>}
         @if (publicDraftSaved) {<div class="draft-notice"><p role="status">Draft saved in this browser for 7 days. @if(publicDraft?.hasPhotos){Photos must be reattached after a refresh.}</p><button class="secondary" type="button" (click)="clearPublicDraft(publicReportForm,reportLocationPicker)">Clear draft and form</button></div>}
         @if (publicDraftError) {<p class="form-error" role="alert">{{publicDraftError}}</p>}
@@ -188,8 +300,8 @@
           <label class="wide">Incident type<select #incidentType name="incidentType" required><option value="">Select incident type</option>@for (type of incidentTypes; track type) { <option [value]="type" [selected]="publicDraftValues['incidentType'] === type">{{ type }}</option> }</select></label>
           <label class="wide">Incident level<select #severityLevel name="severityLevel" required><option value="">Select incident level</option>@for (level of incidentLevels; track level) { <option [value]="level" [selected]="publicDraftValues['severityLevel'] === level">{{ level }}</option> }</select></label>
           <label class="wide">Description <span class="optional">(optional)</span><textarea #description name="description" [value]="publicDraftValues['description'] ?? ''" maxlength="2000" rows="5" placeholder="Describe the water level, affected roads, and immediate risks, if known."></textarea></label>
-          <label>Reporter name <small>(optional)</small><input #reporterName name="reporterName" [value]="publicDraftValues['reporterName'] ?? ''" /></label>
-          <label>Contact information <small>(optional)</small><input #reporterContact name="reporterContactInfo" [value]="publicDraftValues['reporterContactInfo'] ?? ''" /></label>
+          <label>Reporter name<input #reporterName name="reporterName" [value]="account?.resident?.['full_name'] ?? ''" readonly /></label>
+          <label>Contact information<input #reporterContact name="reporterContactInfo" [value]="account?.resident?.['contact_number'] ?? ''" readonly /></label>
           <div class="wide report-photo-field">
             <span>Photos <small>JPEG or PNG, maximum 5 files at 5 MB each</small></span>
             <div class="report-photo-options">
@@ -208,6 +320,7 @@
           </div>
           <button class="primary" type="submit" [disabled]="loading">{{ loading ? 'Submitting…' : 'Submit flood report' }}</button>
         </form>
+        }
         <div class="public-columns report-results">
           <article class="public-card"><span class="eyebrow">VALIDATED INCIDENTS</span><h2>Recent flood reports</h2>
             @for (report of publicReports; track report['report_id']) {
@@ -261,7 +374,7 @@
       <div class="nav-group"><h2>{{ group.label }}</h2>
       @for (item of group.items; track item.id) {
         <button type="button" [attr.aria-current]="activePage === item.id ? 'page' : null" [class.active]="activePage === item.id" (click)="setPage(item.id)">
-          <span class="nav-icon">{{ item.icon }}</span>{{ item.label }}
+          <span class="nav-icon" aria-hidden="true">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span>
           @if (item.id === 'reports' && pendingReportCount > 0) { <span class="badge">{{ pendingReportCount }}</span> }
           @else if (item.badge) { <span class="badge">{{ item.badge }}</span> }
         </button>
@@ -285,7 +398,7 @@
       <div class="top-actions">
         <button type="button" class="secondary task-finder-trigger" (click)="taskQuery = ''; taskFinder.showModal()" aria-haspopup="dialog">⌕ Find a task</button>
         <label class="theme-selector">Theme <select [ngModel]="theme" (ngModelChange)="setTheme($event)" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
-        <button type="button" class="bell" aria-label="Recent notifications" [attr.aria-expanded]="headerNotificationsOpen" aria-controls="header-notifications" (click)="toggleHeaderNotifications()"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></button>
+@if (api.user()?.role !== 'Secretary') {         <button type="button" class="bell" aria-label="Recent notifications" [attr.aria-expanded]="headerNotificationsOpen" aria-controls="header-notifications" (click)="toggleHeaderNotifications()"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></button> }
         <div class="avatar">{{ api.user()?.fullName?.slice(0, 2) }}</div>
         @if (headerNotificationsOpen) {
           <section class="header-notifications" id="header-notifications" aria-label="Recent notifications">
@@ -308,11 +421,24 @@
       <small class="task-finder-note">Searches available pages and tasks. Search resident names inside the resident list.</small>
     </dialog>
     <section class="content">
-      <nav class="workspace-location" aria-label="Current location"><button type="button" (click)="setPage('dashboard')">Dashboard</button>@if(activePage !== 'dashboard'){<span aria-hidden="true">/</span><span>{{currentSection}}</span><span aria-hidden="true">/</span><b>{{currentPage.title}}</b>}</nav>
+@if (api.user()?.role !== 'Secretary') {       <nav class="workspace-location" aria-label="Current location"><button type="button" (click)="setPage('dashboard')">Dashboard</button>@if(activePage !== 'dashboard'){<span aria-hidden="true">/</span><span>{{currentSection}}</span><span aria-hidden="true">/</span><b>{{currentPage.title}}</b>}</nav> }
       @if (errorMessage) { <div class="connection-error"><span>!</span>{{ errorMessage }}<button type="button" (click)="errorMessage = ''" aria-label="Dismiss error message">×</button></div> }
       @if (successMessage) { <div class="admin-success" role="status"><span>✓</span>{{ successMessage }}<button (click)="successMessage = ''" aria-label="Dismiss success message">×</button></div> }
       @if (loading) { <div class="loading-bar" role="status"><span class="mini-flood-icon" aria-hidden="true"><b>💧</b><i></i><i></i></span><strong>Loading flood information…</strong></div> }
-      @if (activePage === 'dashboard') {
+      @if (activePage === 'contacts') {
+        @defer (on immediate){<app-community-support (planner)="setPage('planner')"></app-community-support>}
+      } @else if (activePage === 'registrations') {
+        <div class="page-heading"><div><span class="eyebrow">RESIDENT VALIDATION</span><h1>Resident Approvals</h1><p>Check the applicant's identity and household before approving flood reporting.</p></div></div>
+        <div class="toolbar"><label>Status<select [(ngModel)]="registrationStatus" (ngModelChange)="loadRegistrations()" [disabled]="registrationLoading"><option>Pending</option><option>Approved</option><option>Rejected</option></select></label><button type="button" class="secondary" [disabled]="registrationLoading" (click)="loadRegistrations(registrationPage)">Refresh</button></div>
+        @if(registrationLoading){<p role="status">Loading registrations…</p>}
+        @else if(registrationError){<p class="form-error" role="alert">{{registrationError}}</p>}
+        @else {
+          <div class="resident-lookup-table"><table><thead><tr><th scope="col">Applicant</th><th scope="col">Household</th><th scope="col">Contact</th><th scope="col">Submitted</th><th scope="col">Status</th><th scope="col">Action</th></tr></thead><tbody>
+            @for(registration of registrations;track registration['user_id']){<tr><td><b>{{registration['full_name']}}</b><small>{{registration['address_line']}}</small></td><td>{{registration['household_number'] || 'Not provided'}}</td><td>{{registration['contact_number']}}<small>{{registration['email']}}</small></td><td>{{registration['created_at'] | date:'mediumDate'}}</td><td>{{registration['status']}}</td><td><button type="button" class="secondary" (click)="openRegistrationReview(registration, registrationReviewDialog)">{{registration['status'] === 'Pending' ? 'Review' : 'View'}}</button></td></tr>} @empty {<tr><td colspan="6">No {{registrationStatus.toLowerCase()}} registrations.</td></tr>}
+          </tbody></table></div>
+          @if(registrationPages > 1){<nav class="resident-lookup-pagination" aria-label="Registration pages"><button class="secondary" [disabled]="registrationPage <= 1" (click)="loadRegistrations(registrationPage - 1)">Previous</button><span>Page {{registrationPage}} of {{registrationPages}}</span><button class="secondary" [disabled]="registrationPage >= registrationPages" (click)="loadRegistrations(registrationPage + 1)">Next</button></nav>}
+        }
+      } @else if (activePage === 'dashboard') {
         <div class="page-heading">
           <div><span class="eyebrow">START HERE</span><h1>Dashboard</h1><p>See what needs attention, then choose your next task.</p></div>
           <button type="button" class="primary" (click)="taskQuery = ''; taskFinder.showModal()">Find a task</button>
@@ -329,6 +455,7 @@
           <div class="panel-head"><div><span class="eyebrow">NEXT ACTIONS</span><h2 id="attention-title">Needs attention</h2><p>Open a response task to continue where it matters.</p></div><button type="button" class="secondary" (click)="loadDashboard()" [disabled]="loading">Refresh</button></div>
           @if (dashboardAttention; as attention) {
             <div class="attention-grid">
+              <button type="button" (click)="setPage('contacts')"><strong>{{ attention.help }}</strong><b>Open requests for help</b><span>Resident requests awaiting assistance or resolution</span><small>Review assistance requests →</small></button>
               @if (canReviewReports) { <button type="button" (click)="openPendingReports()"><strong>{{ attention.pending }}</strong><b>Reports awaiting review</b><span>Submitted and under review</span><small>Review reports →</small></button> }
               <button type="button" (click)="openResponseResidents()"><strong>{{ attention.residents }}</strong><b>Residents marked for evacuation</b><span>{{ attention.residents === '—' ? 'Count unavailable' : 'Active resident records' }}</span><small>Open resident list →</small></button>
               <button type="button" (click)="setPage('evacuation')"><strong>{{ attention.shelters }}</strong><b>Centers nearing capacity</b><span>{{ attention.shelters === '—' ? 'Count unavailable' : 'Active centers at 80% occupancy or above' }}</span><small>Inspect center capacity →</small></button>
@@ -414,6 +541,10 @@
         </article>
       } @else if (activePage === 'statistics') {
         <app-dss mode="statistics" [initialTab]="dssInitialTab" (navigate)="openDssMetric($event)"></app-dss>
+      } @else if (activePage === 'planner') {
+        <app-dss mode="planner" (navigate)="openDssMetric($event)"></app-dss>
+      } @else if (activePage === 'assistance') {
+        <app-dss mode="assistance" (navigate)="openDssMetric($event)"></app-dss>
       } @else if (activePage === 'dss') {
         <app-dss mode="dss" (navigate)="openDssMetric($event)"></app-dss>
       } @else {
@@ -421,7 +552,7 @@
           <div><span class="eyebrow">{{ currentPage.eyebrow }}</span><h1>{{ currentPage.title }}</h1><p>{{ currentPage.description }}</p></div>
           <div class="page-actions">
             @if (activePage === 'residents') {
-              @if (canManageCurrentResource && !isHistoricalResidentYear) {
+              @if (canManageCurrentResource) {
                 <button type="button" class="secondary" id="resident-import-trigger" (click)="openResidentImport()">Import residents</button>
               }
               <label class="resident-year-selector"><span>Record year</span><select #residentYear [value]="selectedResidentYear" (change)="selectResidentYear(residentYear.value)">@for (year of residentYears; track year) { <option [value]="year">{{ year }}{{ year === currentResidentYear ? ' · Current' : '' }}</option> }</select></label>
@@ -475,12 +606,12 @@
               @if(currentResource === 'notifications'){<button type="button" class="primary" (click)="openNewAdvisory()">＋ New advisory</button>}
 
             }
-            @if (editorFields.length && canManageCurrentResource && activePage !== 'notifications' && !(activePage === 'evacuation' && currentResource === 'residents') && !(activePage === 'residents' && isHistoricalResidentYear)) { <button class="primary" (click)="openEditor()">{{hasNewRecordDraft ? 'Resume draft' : '＋ ' + currentActionLabel}}</button> }
+            @if (editorFields.length && canManageCurrentResource && activePage !== 'reports' && activePage !== 'notifications' && !(activePage === 'evacuation' && currentResource === 'residents') && !(activePage === 'residents' && isHistoricalResidentYear)) { <button class="primary" (click)="openEditor()">{{hasNewRecordDraft ? 'Resume draft' : '＋ ' + currentActionLabel}}</button> }
           </div>
         </div>
         @if (activePage === 'residents') {
           <details class="workspace-disclosure resident-summary-disclosure"><summary>{{selectedResidentYear}} resident summary · {{residentYearSummary.totalResidents}} residents · {{residentYearSummary.highPriorityResidents}} high priority</summary><section class="resident-year-overview" aria-label="Resident summary for selected year">
-            <div class="resident-year-heading"><div><span class="eyebrow">ANNUAL RESIDENT SNAPSHOT</span><h2>{{ selectedResidentYear }} resident records</h2><p>{{ isHistoricalResidentYear ? 'Historical snapshot. Later profile changes do not alter these records.' : 'Current-year snapshot synchronized with the live resident registry.' }}</p></div>@if (isHistoricalResidentYear) { <span class="snapshot-badge">Read-only</span> }</div>
+            <div class="resident-year-heading"><div><span class="eyebrow">ANNUAL RESIDENT SNAPSHOT</span><h2>{{ selectedResidentYear }} resident records</h2><p>{{ isHistoricalResidentYear ? 'Historical snapshot. Later profile changes do not alter these records.' : 'Current-year snapshot synchronized with the live resident registry.' }}</p></div>@if (isHistoricalResidentYear) { <span class="snapshot-badge">Archived records</span> }</div>
             <div class="resident-summary-cards">
               <button type="button" (click)="openResidentSummary('residents')" [class.active]="!activeResourceFilterCount" aria-label="Show all resident records"><i class="resident-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></i><span>Residents</span><b>{{ residentYearSummary.totalResidents }}</b><small>Registered people</small><em aria-hidden="true">→</em></button>
               <button type="button" (click)="openResidentSummary('households')" aria-label="Open household records"><i class="resident-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11 12 3l9 8M5 10v11h14V10M9 21v-6h6v6"/></svg></i><span>Households</span><b>{{ residentYearSummary.totalHouseholds }}</b><small>Household records</small><em aria-hidden="true">→</em></button>
@@ -618,8 +749,8 @@
   @if (residentImportOpen) {
     <div class="modal-backdrop" (keydown)="residentImportKeydown($event)">
       <section class="editor-modal resident-import-modal" role="dialog" aria-modal="true" aria-labelledby="resident-import-title">
-        <div class="panel-head"><div><span class="eyebrow">COMMUNITY RECORDS</span><h2 id="resident-import-title">Import residents</h2></div><button type="button" class="modal-close" aria-label="Close import" [disabled]="residentImportBusy" (click)="closeResidentImport()">×</button></div>
-        <p>Download the template, fill it in, and save as CSV. Use existing household numbers (for example Z1-1), dates as YYYY-MM-DD, and Low, Medium or High priority. Up to 500 residents per file.</p>
+        <div class="panel-head"><div><span class="eyebrow">COMMUNITY RECORDS</span><h2 id="resident-import-title">Import residents for {{selectedResidentYear}}</h2></div><button type="button" class="modal-close" aria-label="Close import" [disabled]="residentImportBusy" (click)="closeResidentImport()">×</button></div>
+        <p>Records will be added to {{selectedResidentYear}}{{isHistoricalResidentYear ? ' only; current residents stay unchanged' : ''}}. Download the template, fill it in, and save as CSV. Use existing household numbers (for example Z1-1), dates as YYYY-MM-DD, and Low, Medium or High priority. Up to 500 residents per file.</p>
         <p>New residents start as Active and Safe. Existing records are never overwritten. The entire file must pass validation before it is saved.</p>
         <button type="button" class="secondary" (click)="downloadResidentTemplate()">Download CSV template</button>
         <label class="import-file">Resident CSV<input type="file" accept=".csv,text/csv" [disabled]="residentImportBusy" (change)="selectResidentImport($event)" /></label>
@@ -693,14 +824,19 @@
           @for (field of section.fields; track field.name) {
             @if (field.name !== 'zoneIds' || currentResource !== 'notifications' || editorValue('targetAudience') === 'Affected Zones') {
             @if (field.type === 'location') {
-              <div class="wide location-field"><span>{{ field.label }}</span><app-location-picker (changed)="saveEditorDraft()" [initialLatitude]="editorValues['latitude'] ?? ''" [initialLongitude]="editorValues['longitude'] ?? ''" [locationLabel]="activePage === 'reports' ? 'incident' : 'shelter'" [includeLocationText]="activePage === 'reports'" [restrictToColacling]="activePage === 'reports'" [showOperationalMap]="activePage === 'evacuation' && currentResource === 'shelters'"></app-location-picker></div>
+              <div class="wide location-field"><span>{{ field.label }}</span><app-location-picker (changed)="saveEditorDraft()" [initialLatitude]="editorValues['latitude'] ?? ''" [initialLongitude]="editorValues['longitude'] ?? ''" [locationLabel]="activePage === 'reports' ? 'incident' : 'shelter'" [includeLocationText]="activePage === 'reports'" [restrictToColacling]="true" [showOperationalMap]="true"></app-location-picker></div>
             } @else {
             <label [class.wide]="field.type === 'textarea' || field.type === 'polygon'"><span class="field-label">{{ field.label }} @if (field.required) { <span class="required-marker" aria-label="required">*</span> }</span>
               @if (field.type === 'textarea') { <textarea [name]="field.name" [required]="field.required" [attr.aria-invalid]="!!fieldErrors[field.name]" [placeholder]="field.placeholder ?? ''" [value]="editorValues[field.name] ?? ''" rows="4"></textarea> }
-              @else if (field.type === 'polygon') { <app-polygon-editor (changed)="saveEditorDraft()" [name]="field.name" [value]="editorValues[field.name] ?? ''" [existingZones]="currentResource === 'barangay-zones' ? existingBarangayZones : []"></app-polygon-editor> }
+              @else if (field.type === 'polygon') { <app-polygon-editor (changed)="saveEditorDraft()" [name]="field.name" [value]="editorValues[field.name] ?? ''" [existingZones]="existingBarangayZones" [selectExisting]="currentResource === 'risk-zones'"></app-polygon-editor> }
               @else if (field.type === 'household-lookup') {
                 <input type="hidden" [name]="field.name" [value]="editorValues[field.name] ?? ''" />
                 <button type="button" class="lookup-trigger" (click)="openHouseholdLookup()"><span>{{ selectedHouseholdLabel || 'No household selected' }}</span><b>{{ selectedHouseholdLabel ? 'Change' : 'Find household' }}</b></button>
+              }
+              @else if (field.type === 'resident-lookup') {
+                <input type="hidden" [name]="field.name" [value]="editorValues[field.name] ?? ''" />
+                <button type="button" class="lookup-trigger" aria-haspopup="dialog" [attr.aria-invalid]="!!fieldErrors[field.name]" (click)="openResidentLookup(residentLookupDialog)"><span>{{selectedAccountResidentLabel || 'No resident selected'}}</span><b>{{selectedAccountResidentLabel ? 'Change' : 'Find resident'}}</b></button>
+                @if (editorValue('residentId')) {<button type="button" class="forgot-link" (click)="editorValues['residentId'] = ''; selectedAccountResident = undefined; saveEditorDraft()">Clear linked resident</button>}
               }
               @else if (field.type === 'select') {
                 @if(editorOutcome && (field.name === 'evacuationStatus' || field.name === 'evacuationShelterId')) {
@@ -787,6 +923,59 @@
       </section>
     </div>
   }
+  <dialog #registrationReviewDialog class="resident-lookup-dialog" aria-labelledby="registration-review-title" (cancel)="registrationReviewBusy && $event.preventDefault()">
+    <div class="panel-head"><div><span class="eyebrow">SECRETARY VALIDATION</span><h2 id="registration-review-title">Resident registration</h2></div><button class="modal-close" aria-label="Close registration review" [disabled]="registrationReviewBusy" (click)="registrationReviewDialog.close()">×</button></div>
+    @if(registrationReview;as registration){
+      <div class="household-facts"><span><b>Applicant</b>{{registration['full_name']}}</span><span><b>Birth date</b>{{registration['date_of_birth'] | date:'mediumDate'}}</span><span><b>Email</b>{{registration['email']}}</span><span><b>Contact number</b>{{registration['contact_number']}}</span><span><b>Address</b>{{registration['address_line']}}</span><span><b>Household number</b>{{registration['household_number'] || 'Not provided'}}</span><span><b>Approval status</b>{{registration['status']}}</span></div>
+      @if(registration['status'] === 'Pending'){
+        <form class="report-form" (submit)="$event.preventDefault(); reviewRegistration('Approved', reviewNotes.value, reviewConfirmed.checked, registrationReviewDialog)">
+          <label class="wide">Resident record<select name="registrationResidentMode" [ngModel]="registrationAddResident" (ngModelChange)="setRegistrationResidentMode($event)" [disabled]="registrationReviewBusy"><option [ngValue]="false">Link an existing resident</option><option [ngValue]="true">Add a new resident and approve</option></select></label>
+          @if(registrationAddResident){
+            <p class="wide">Check the resident lookup for duplicates first. The new resident and account approval will be saved together.</p>
+            <button type="button" class="secondary wide" [disabled]="registrationReviewBusy" (click)="openResidentLookup(residentLookupDialog)">Check existing residents</button>
+            <label class="wide">Search verified households<input name="registrationHouseholdSearch" type="search" [(ngModel)]="registrationHouseholdQuery" [disabled]="registrationReviewBusy || registrationHouseholdLoading" /></label>
+            <button type="button" class="secondary" [disabled]="registrationReviewBusy || registrationHouseholdLoading" (click)="loadRegistrationHouseholds()">Search households</button>
+            @if(registrationHouseholdLoading){<p class="wide" role="status">Loading households…</p>}
+            @if(registrationHouseholdError){<p class="form-error wide" role="alert">{{registrationHouseholdError}}</p>}
+            <label class="wide">Verified household<select name="newResidentHousehold" [(ngModel)]="registrationResident['householdId']" required [disabled]="registrationReviewBusy || registrationHouseholdLoading"><option value="">Select a household</option>@for(household of registrationHouseholds;track household['household_id']){<option [value]="household['household_id']">{{household['household_number']}} · {{household['head_of_household_name']}} · {{household['zone_name']}}</option>}</select><small>Households must be registered and verified before approval.</small></label>
+            @if(registrationHouseholdPages > 1){<nav class="resident-lookup-pagination wide" aria-label="Verified household pages"><button type="button" class="secondary" [disabled]="registrationHouseholdPage <= 1 || registrationHouseholdLoading || registrationReviewBusy" (click)="loadRegistrationHouseholds(registrationHouseholdPage - 1)">Previous</button><span>Page {{registrationHouseholdPage}} of {{registrationHouseholdPages}}</span><button type="button" class="secondary" [disabled]="registrationHouseholdPage >= registrationHouseholdPages || registrationHouseholdLoading || registrationReviewBusy" (click)="loadRegistrationHouseholds(registrationHouseholdPage + 1)">Next</button></nav>}
+            <label>Full name<input name="newResidentName" [(ngModel)]="registrationResident['fullName']" required minlength="2" maxlength="160" [disabled]="registrationReviewBusy" /></label>
+            <label>Date of birth<input name="newResidentBirthDate" type="date" [(ngModel)]="registrationResident['dateOfBirth']" required [max]="registrationToday" [disabled]="registrationReviewBusy" /></label>
+            <label>Sex<select name="newResidentSex" [(ngModel)]="registrationResident['sex']" required [disabled]="registrationReviewBusy"><option value="">Select sex</option><option>Female</option><option>Male</option><option>Intersex</option><option>Prefer not to say</option><option>Not recorded</option></select></label>
+            <label>Priority level<select name="newResidentPriority" [(ngModel)]="registrationResident['priorityLevel']" required [disabled]="registrationReviewBusy"><option value="">Select priority</option><option>Low</option><option>Medium</option><option>High</option></select></label>
+            <label>Contact number<input name="newResidentContact" type="tel" [(ngModel)]="registrationResident['contactNumber']" maxlength="30" [disabled]="registrationReviewBusy" /></label>
+            <label class="wide">Residential address<input name="newResidentAddress" [(ngModel)]="registrationResident['addressLine']" required minlength="5" maxlength="255" [disabled]="registrationReviewBusy" /></label>
+          } @else {
+          <label class="wide">Linked resident<button class="lookup-trigger" type="button" aria-haspopup="dialog" [disabled]="registrationReviewBusy" (click)="openResidentLookup(residentLookupDialog)"><span>{{selectedAccountResidentLabel || 'No resident selected'}}</span><b>Find resident</b></button></label>
+          @if(selectedAccountResident;as resident){<div class="household-facts wide"><span><b>Registered name</b>{{resident['full_name']}}</span><span><b>Registered birth date</b>{{('' + resident['date_of_birth']) | date:'mediumDate'}}</span><span><b>Household</b>{{resident['household_number']}}</span><span><b>Household verification</b>{{resident['verification_status']}}</span></div>}
+          }
+          <label class="wide">Review notes<textarea #reviewNotes maxlength="1000" rows="3" [disabled]="registrationReviewBusy"></textarea><small>A reason is required for rejection.</small></label>
+          <label class="wide"><span><input #reviewConfirmed type="checkbox" [disabled]="registrationReviewBusy" /> I have validated the applicant's identity and household membership{{registrationAddResident ? ' and checked for an existing resident record' : ' against the linked resident record'}}.</span></label>
+          @if(registrationReviewError){<p class="form-error wide" role="alert">{{registrationReviewError}}</p>}
+          <div class="modal-actions wide"><button type="button" class="secondary" [disabled]="registrationReviewBusy" (click)="registrationReviewDialog.close()">Cancel</button><button type="button" class="danger-button" [disabled]="registrationReviewBusy" (click)="reviewRegistration('Rejected', reviewNotes.value, false, registrationReviewDialog)">Reject</button><button class="primary" type="submit" [disabled]="registrationReviewBusy">{{registrationReviewBusy ? 'Saving…' : registrationAddResident ? 'Add resident and approve' : 'Approve registration'}}</button></div>
+        </form>
+      } @else {<p>Review notes: {{registration['review_notes'] || 'No additional notes.'}}</p><p>Reviewed {{registration['reviewed_at'] | date:'medium'}}</p>}
+    }
+  </dialog>
+  <dialog #residentLookupDialog class="resident-lookup-dialog" aria-labelledby="resident-lookup-title">
+    <div class="panel-head"><div><span class="eyebrow">USER ACCOUNT</span><h2 id="resident-lookup-title">Select a resident</h2></div><button type="button" class="modal-close" (click)="residentLookupDialog.close()" aria-label="Close resident lookup">×</button></div>
+    <p>Search by name, household, address or contact. Resident accounts require an active resident in a verified household.</p>
+    <form class="resident-lookup-search" (submit)="$event.preventDefault(); loadResidentLookup()">
+      <label class="lookup-search"><span>Search residents</span><input type="search" name="residentSearch" [(ngModel)]="residentLookupQuery" placeholder="Name, household, address or contact" autofocus [disabled]="residentLookupLoading" /></label>
+      <button type="submit" class="primary" [disabled]="residentLookupLoading">Search</button>
+    </form>
+    @if (residentLookupLoading) {<p role="status">Loading residents…</p>}
+    @else if (residentLookupError) {<p class="form-error" role="alert">{{residentLookupError}}</p><button type="button" class="secondary" (click)="loadResidentLookup(residentLookupPage)">Retry</button>}
+    @else {
+      <div class="resident-lookup-table"><table><caption>{{residentLookupTotal}} matching resident{{residentLookupTotal === 1 ? '' : 's'}}</caption><thead><tr><th scope="col">Resident</th><th scope="col">Birth date</th><th scope="col">Household</th><th scope="col">Zone</th><th scope="col">Record status</th><th scope="col">Action</th></tr></thead><tbody>
+        @for (resident of residentLookupRows; track resident['resident_id']) {
+          <tr [class.selected]="editorValue('residentId') === resident['resident_id']"><td><b>{{resident['full_name']}}</b><small>{{resident['address_line']}}</small></td><td>{{('' + resident['date_of_birth']) | date:'mediumDate'}}</td><td>{{resident['household_number'] || 'Not recorded'}}@if(activePage === 'registrations'){<small>{{resident['verification_status']}} {{resident['linked_user_id'] ? '· Account already linked' : ''}}</small>}</td><td>{{resident['zone_name'] || 'Not recorded'}}</td><td>{{resident['record_status']}}</td><td><button type="button" class="secondary" [disabled]="!canSelectAccountResident(resident)" [attr.aria-label]="'Select ' + resident['full_name']" (click)="selectAccountResident(resident, residentLookupDialog)">{{editorValue('residentId') === resident['resident_id'] ? 'Selected' : 'Select'}}</button></td></tr>
+        } @empty {<tr><td colspan="6">No matching residents found. Try another name or household.</td></tr>}
+      </tbody></table></div>
+      @if (residentLookupPages > 1) {<nav class="resident-lookup-pagination" aria-label="Resident lookup pages"><button type="button" class="secondary" [disabled]="residentLookupPage <= 1" (click)="loadResidentLookup(residentLookupPage - 1)">Previous</button><span>Page {{residentLookupPage}} of {{residentLookupPages}}</span><button type="button" class="secondary" [disabled]="residentLookupPage >= residentLookupPages" (click)="loadResidentLookup(residentLookupPage + 1)">Next</button></nav>}
+    }
+    <div class="modal-actions"><button type="button" class="secondary" (click)="residentLookupDialog.close()">Cancel</button></div>
+  </dialog>
   @if (householdLookupOpen) {
     <div class="lookup-backdrop" (click)="householdLookupOpen = false">
       <section class="household-lookup-modal" role="dialog" aria-modal="true" aria-labelledby="household-lookup-title" (click)="$event.stopPropagation()">

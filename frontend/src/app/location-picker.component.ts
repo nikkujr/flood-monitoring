@@ -2,13 +2,14 @@ import { AfterViewInit, ChangeDetectorRef, Component, ElementRef, EventEmitter, 
 import * as L from 'leaflet';
 import { environment } from '../environments/environment';
 import { ApiService } from './api.service';
+import {pointInsideGeometry} from './map-boundary';
 import {assessedZoneFill,riskColors} from './map-zone-style';
 
 @Component({
   selector: 'app-location-picker',
   standalone: true,
   template: `
-    <div class="picker-help">Tap the map to {{ hasLocation ? 'move' : 'place' }} the {{ locationLabel }} pin{{ restrictToColacling ? ' inside a configured barangay zone' : '' }}.</div>
+    <div class="picker-help">Tap the map to {{ hasLocation ? 'move' : 'place' }} the {{ locationLabel }} pin{{ restrictToColacling ? ' inside the Colacling boundary' : '' }}.</div>
     <div class="picker-wrap">
       <div class="picker-style" role="group" aria-label="Map style"><button type="button" [class.active]="mapStyle === 'roadmap'" (click)="setMapStyle('roadmap')">Roadmap</button><button type="button" [class.active]="mapStyle === 'satellite'" (click)="setMapStyle('satellite')">Satellite</button></div>
       <div class="picker-map" [id]="mapId" [attr.aria-label]="locationLabel + ' location picker'"></div>
@@ -16,6 +17,7 @@ import {assessedZoneFill,riskColors} from './map-zone-style';
     <input #latitudePayload type="hidden" name="latitude" [value]="latitude" />
     <input #longitudePayload type="hidden" name="longitude" [value]="longitude" />
     @if (includeLocationText) { <input #locationTextPayload type="hidden" name="locationText" [value]="generatedLocationText" /> }
+    <div class="picker-help">Dashed blue line: Colacling boundary · Dashed colored lines: barangay zones</div>
     <div class="picker-actions">
       <span>{{ hasLocation ? (detectedZoneName || 'Location pinned') : 'No location pinned' }}</span>
       <button type="button" class="locate-button" (click)="useCurrentLocation()" [disabled]="locating">{{ locating ? 'Locating…' : 'Share current location' }}</button>
@@ -43,7 +45,7 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
   @Input() locationLabel = 'shelter';
   @Output() changed = new EventEmitter<void>();
   @Input() includeLocationText = false;
-  @Input() restrictToColacling = false;
+  @Input() restrictToColacling = true;
   @Input() showOperationalMap = false;
   @ViewChild('latitudePayload') private latitudePayload?: ElementRef<HTMLInputElement>;
   @ViewChild('longitudePayload') private longitudePayload?: ElementRef<HTMLInputElement>;
@@ -62,6 +64,7 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
   private operationalOverlay = L.layerGroup();
   private baseLayer?: L.TileLayer;
   private satelliteLabels?: L.TileLayer;
+  private boundary: unknown;
   private barangayZones: Array<Record<string, any>> = [];
   private destroyed = false;
 
@@ -113,10 +116,8 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
   }
 
   setLocation(location: L.LatLng) {
-    if (this.restrictToColacling && (!this.barangayZones.length || !this.findZone(location))) {
-      this.locationError = this.barangayZones.length
-        ? 'Choose a location inside a configured barangay zone.'
-        : 'Barangay zones are not available yet. Please retry loading the map.';
+    if (this.restrictToColacling && !pointInsideGeometry(location.lat, location.lng, this.boundary)) {
+      this.locationError = this.boundary ? 'Choose a location inside the Colacling boundary.' : 'The Colacling boundary is not available yet. Please retry loading the map.';
       return;
     }
     this.locationError = '';
@@ -125,7 +126,6 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
     this.detectZone(location);
     this.syncPayloads();
     this.renderMarker();
-    this.locationError = '';
     this.changed.emit();
   }
 
@@ -140,19 +140,7 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
       ({ coords }) => {
         if (this.destroyed) return;
         this.locating = false;
-        const location = L.latLng(coords.latitude, coords.longitude);
-        if (this.restrictToColacling && (!this.barangayZones.length || !this.findZone(location))) {
-          this.locationError = this.barangayZones.length
-            ? 'Your current location is outside the configured barangay zones.'
-            : 'Barangay zones are not available yet. Please retry loading the map.';
-          return;
-        }
-        this.latitude = location.lat.toFixed(7);
-        this.longitude = location.lng.toFixed(7);
-        this.detectZone(location);
-        this.syncPayloads();
-        this.renderMarker();
-        this.changed.emit();
+        this.setLocation(L.latLng(coords.latitude, coords.longitude));
         this.changeDetector.detectChanges();
       },
       (error) => {
@@ -176,29 +164,14 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
         this.mapLoading = false;
         this.operationalOverlay.clearLayers();
         this.barangayZones = data['zones'] ?? [];
-        if (this.restrictToColacling && !this.barangayZones.length) this.mapError = 'No barangay zones are configured for report pinning.';
-        if (this.restrictToColacling && !this.barangayZones.length) this.mapError = 'No barangay zones are configured for report pinning.';
+        this.boundary = data['boundary'];
+        if (!this.boundary) this.mapError = 'The Colacling boundary is unavailable. Retry before pinning.';
+        if (this.boundary) L.geoJSON(this.boundary as any, {style:{color:'#0758c7',weight:3,fill:false,dashArray:'7 5'}}).addTo(this.operationalOverlay);
         if (this.hasLocation) this.detectZone(L.latLng(Number(this.latitude), Number(this.longitude)));
         this.drawOperationalZones(data['zones'] ?? [], false);
         if (this.restrictToColacling && !this.hasLocation && this.barangayZones.length && this.map) {
           const zoneLayers = L.featureGroup(this.operationalOverlay.getLayers());
           if (zoneLayers.getBounds().isValid()) this.map.fitBounds(zoneLayers.getBounds(), { padding: [25, 25], maxZoom: 16 });
-        }
-        this.drawOperationalZones(data['riskZones'] ?? [], true);
-        for (const shelter of data['shelters'] ?? []) {
-          L.circleMarker([Number(shelter.latitude), Number(shelter.longitude)], {
-            radius: 7, color: '#fff', weight: 2, fillColor: '#18895c', fillOpacity: 1
-          }).bindTooltip(String(shelter.shelter_name ?? 'Evacuation shelter')).addTo(this.operationalOverlay);
-        }
-        for (const report of data['reports'] ?? []) {
-          L.circleMarker([Number(report.latitude), Number(report.longitude)], {
-            radius: 6, color: '#fff', weight: 2, fillColor: '#d95050', fillOpacity: 1
-          }).bindTooltip(String(report.location_text ?? 'Validated flood report').replace(/\s*\(-?\d{1,2}(?:\.\d+)?,\s*-?\d{1,3}(?:\.\d+)?\)/g, '')).addTo(this.operationalOverlay);
-        }
-        for (const route of data['routes'] ?? []) {
-          const geo = typeof route.route_geojson === 'string' ? JSON.parse(route.route_geojson) : route.route_geojson;
-          L.geoJSON(geo, { style: { color: '#6e49b8', weight: 3, dashArray: '7 6' } })
-            .bindTooltip(String(route.route_name ?? 'Evacuation route')).addTo(this.operationalOverlay);
         }
         this.changeDetector.detectChanges();
       },
@@ -227,6 +200,7 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
 
   private detectZone(point: L.LatLng) {
     this.detectedZoneName = this.findZone(point);
+    if (this.restrictToColacling && this.boundary && !pointInsideGeometry(point.lat, point.lng, this.boundary)) this.locationError = 'The saved location is outside Colacling. Move the pin inside the boundary before saving.';
     this.syncPayloads();
   }
 
@@ -236,7 +210,7 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
         const value = zone['polygon_geojson'] ?? zone['polygonGeoJson'];
         const geometry = typeof value === 'string' ? JSON.parse(value) : value;
         const polygons = geometry?.type === 'Polygon' ? [geometry.coordinates] : geometry?.type === 'MultiPolygon' ? geometry.coordinates : [];
-        if (polygons.some((polygon: number[][][]) => this.isInsidePolygon(point, polygon))) {
+        if (polygons.some((polygon: number[][][]) => pointInsideGeometry(point.lat, point.lng, {type:'Polygon',coordinates:polygon}))) {
           return String(zone['zone_name'] ?? 'Barangay zone');
         }
       } catch {
@@ -246,21 +220,6 @@ export class LocationPickerComponent implements AfterViewInit, OnChanges, OnDest
     return '';
   }
 
-  private isInsidePolygon(point: L.LatLng, polygon: number[][][]) {
-    if (!this.isInsideRing(point, polygon[0] ?? [])) return false;
-    return !polygon.slice(1).some((hole) => this.isInsideRing(point, hole));
-  }
-
-  private isInsideRing(point: L.LatLng, ring: number[][]) {
-    let inside = false;
-    for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index++) {
-      const [x, y] = ring[index] ?? [];
-      const [previousX, previousY] = ring[previous] ?? [];
-      const intersects = ((y > point.lat) !== (previousY > point.lat)) && point.lng < (previousX - x) * (point.lat - y) / (previousY - y) + x;
-      if (intersects) inside = !inside;
-    }
-    return inside;
-  }
 
   clear() {
     this.latitude = '';

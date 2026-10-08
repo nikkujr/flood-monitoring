@@ -41,6 +41,11 @@ try {
     .replace("CREATE DATABASE IF NOT EXISTS bantay_baha", `CREATE DATABASE IF NOT EXISTS \`${databaseName}\``)
     .replace("USE bantay_baha;", `USE \`${databaseName}\`;`);
   await connection.query(schema);
+  await connection.query(`ALTER TABLE \`${databaseName}\`.users MODIFY role ENUM('Super Admin','Disaster Officer','Data Encoder','Resident','Secretary') NOT NULL`);
+  const [reporterColumns] = await connection.query<mysql.RowDataPacket[]>(
+    "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='flood_reports' AND COLUMN_NAME='reporter_user_id'", [databaseName]
+  );
+  if (!reporterColumns.length) await connection.query(`ALTER TABLE \`${databaseName}\`.flood_reports ADD COLUMN reporter_user_id CHAR(36) NULL, ADD FOREIGN KEY (reporter_user_id) REFERENCES users(user_id) ON DELETE SET NULL`);
   await connection.query(`ALTER TABLE \`${databaseName}\`.rescue_teams MODIFY vehicle VARCHAR(120) NULL`);
 
   for (const [table, column, definition] of [

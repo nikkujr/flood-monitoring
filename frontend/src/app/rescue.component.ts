@@ -9,6 +9,8 @@ import type {RescueBoard,RescueMission,RescuePerson,RescueTeam,ResidentOutcome,R
 export class RescueComponent implements OnInit,OnDestroy {
   private api=inject(ApiService);private cdr=inject(ChangeDetectorRef);private subscriptions=new Subscription();
   @Output() changed=new EventEmitter<void>();
+  @Output() dispatched=new EventEmitter<void>();
+  assistanceRequest?:{requestId:string;revision:number;confirmed:true};
   @Output() navigate=new EventEmitter<{page:string;resource?:string}>();
   @Input() previewOnly=false;
   @Input() view:ResponseView='missions';
@@ -71,13 +73,13 @@ export class RescueComponent implements OnInit,OnDestroy {
   ngOnInit(){this.subscriptions.add(timer(0,30000).pipe(exhaustMap(()=>this.api.rescueBoard().pipe(catchError(error=>{this.error=error?.error?.message??'Rescue updates could not be loaded. Refresh before acting.';return of(null);}))),finalize(()=>this.cdr.markForCheck())).subscribe(board=>{if(board){this.board=board;this.missionPage=Math.min(this.missionPage,this.missionPageCount);this.outcomePage=Math.min(this.outcomePage,this.outcomePageCount);this.teamPage=Math.min(this.teamPage,this.teamPageCount);this.assignedChange.emit(this.assignedResidentIds);}this.loading=false;this.cdr.markForCheck();}));}
   ngOnDestroy(){this.subscriptions.unsubscribe();}
   refresh(){this.subscriptions.add(this.api.rescueBoard().subscribe({next:board=>{this.board=board;this.missionPage=Math.min(this.missionPage,this.missionPageCount);this.outcomePage=Math.min(this.outcomePage,this.outcomePageCount);this.teamPage=Math.min(this.teamPage,this.teamPageCount);this.assignedChange.emit(this.assignedResidentIds);this.cdr.markForCheck();},error:error=>{this.error=error?.error?.message??'Unable to refresh rescue updates.';this.cdr.markForCheck();}}));}
-  prepare(people:RescuePerson[],destination:{id:string;name:string}){
+  prepare(people:RescuePerson[],destination:{id:string;name:string},assistanceRequest?:{requestId:string;revision:number;confirmed:true}){
     if(!this.canManage||this.saving)return;
-    this.people=people;this.destination=destination;this.teamId='';this.pickup=[...new Set(people.map(p=>p.address).filter(Boolean))].join('; ').slice(0,500);this.instructions='';this.dispatchConfirmed=false;this.error='';this.refresh();this.dispatchDialog.nativeElement.showModal();
+    this.assistanceRequest=assistanceRequest;this.people=people;this.destination=destination;this.teamId='';this.pickup=[...new Set(people.map(p=>p.address).filter(Boolean))].join('; ').slice(0,500);this.instructions='';this.dispatchConfirmed=false;this.error='';this.refresh();this.dispatchDialog.nativeElement.showModal();
   }
   dispatch(dialog:HTMLDialogElement){
     if(this.saving||!this.canManage||!this.destination||!this.dispatchConfirmed||!this.selectedTeam||!this.fitsTeam(this.selectedTeam))return;
-    this.run(this.api.dispatchRescue({teamId:this.teamId,shelterId:this.destination.id,residentIds:this.people.map(p=>p.id),pickup:this.pickup,instructions:this.instructions,expectedStatuses:Object.fromEntries(this.people.map(p=>[p.id,p.status]))}),()=>{dialog.close();this.success='Team dispatched.';this.search='';this.missionPage=1;this.showMissions();});
+    this.run(this.api.dispatchRescue({teamId:this.teamId,shelterId:this.destination.id,residentIds:this.people.map(p=>p.id),pickup:this.pickup,instructions:this.instructions,expectedStatuses:Object.fromEntries(this.people.map(p=>[p.id,p.status])),assistanceRequest:this.assistanceRequest}),()=>{dialog.close();this.success='Team dispatched.';this.search='';this.missionPage=1;this.showMissions();this.dispatched.emit();});
   }
   addTeam(){if(!this.canManage||this.saving)return;this.run(this.editingTeamId?this.api.editRescueTeam(this.editingTeamId,this.team):this.api.addRescueTeam(this.team),()=>{this.teamDialog.nativeElement.close();this.resetTeam();});}
   availability(id:string,value:string){if(!this.canManage||this.saving)return;this.run(this.api.setRescueTeamAvailability(id,value));}
