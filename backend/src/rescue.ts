@@ -34,6 +34,66 @@ async function saveMembers(c:any,teamId:string,ids:string[]){
 }
 export const rescueRouter=Router();
 rescueRouter.use(requireAuth);
+const teamFrom=`FROM rescue_teams t LEFT JOIN rescue_missions m ON m.team_id=t.team_id AND m.status NOT IN ('Arrived','Cancelled')`;
+const outcomeFrom='FROM resident_outcomes o JOIN residents r ON r.resident_id=o.resident_id JOIN households h ON h.household_id=r.household_id JOIN zones z ON z.zone_id=h.zone_id';
+async function roster(teams:any[]){
+  if(!teams.length)return;
+  const [members]=await db.query<any[]>('SELECT tm.team_id,v.*,a.mission_id active_mission_id FROM rescue_team_members tm JOIN volunteers v ON v.volunteer_id=tm.volunteer_id LEFT JOIN rescue_active_responders a ON a.volunteer_id=v.volunteer_id WHERE tm.team_id IN (?) ORDER BY v.full_name',[teams.map(t=>t.team_id)]);
+  for(const t of teams)t.members=members.filter(m=>m.team_id===t.team_id);
+}
+async function hydrateMissions(missions:any[]){
+  const ids=missions.flatMap(m=>json(m.residents).map((r:any)=>r.id));
+  const [outcomes]=ids.length?await db.query<any[]>('SELECT resident_id,outcome FROM resident_outcomes WHERE resident_id IN (?)',[ids]):[[]];
+  return missions.map(m=>({...m,residents:json(m.residents).map((r:any)=>({...r,outcome:outcomes.find(o=>o.resident_id===r.id)?.outcome??null})),team_snapshot:json(m.team_snapshot),allowedStatuses:missionTransitions[m.status],updates:[]}));
+}
+rescueRouter.get('/summary',wrap(async(_req,res)=>{
+  const [[counts]]=await db.query<any[]>(`SELECT COUNT(*) activeMissions,COALESCE(SUM(updated_at < NOW()-INTERVAL 30 MINUTE),0) awaitingUpdate FROM rescue_missions WHERE status NOT IN ('Arrived','Cancelled')`);
+  const [assigned]=await db.query<any[]>('SELECT resident_id FROM rescue_active_residents');
+  const [outcomes]=await db.query<any[]>('SELECT outcome,COUNT(*) total FROM resident_outcomes GROUP BY outcome');
+  const [[teamCounts]]=await db.query<any[]>(`SELECT COUNT(*) teamsTotal,COALESCE(SUM(t.availability='Available' AND m.mission_id IS NULL AND t.leader_id IS NOT NULL AND EXISTS(SELECT 1 FROM rescue_team_members tm WHERE tm.team_id=t.team_id AND tm.volunteer_id=t.leader_id) AND NOT EXISTS(SELECT 1 FROM rescue_team_members tm JOIN volunteers v ON v.volunteer_id=tm.volunteer_id LEFT JOIN rescue_active_responders a ON a.volunteer_id=v.volunteer_id WHERE tm.team_id=t.team_id AND (v.availability_status!='Available' OR a.mission_id IS NOT NULL))),0) availableTeams ${teamFrom}`);
+  res.json({teams:[],responders:[],missions:[],outcomes:[],summary:{activeMissions:Number(counts.activeMissions),awaitingUpdate:Number(counts.awaitingUpdate),teamsTotal:Number(teamCounts.teamsTotal),availableTeams:Number(teamCounts.availableTeams),assignedResidentIds:assigned.map(r=>r.resident_id),outcomeCounts:Object.fromEntries(outcomes.map(o=>[o.outcome,Number(o.total)]))},generatedAt:new Date().toISOString()});
+}));
+rescueRouter.get('/options',wrap(async(_req,res)=>{
+  const [teams]=await db.query<any[]>(`SELECT t.*,m.mission_id active_mission_id ${teamFrom} ORDER BY t.name`);await roster(teams);
+  const [responders]=await db.query<any[]>('SELECT v.*,a.mission_id active_mission_id FROM volunteers v LEFT JOIN rescue_active_responders a ON a.volunteer_id=v.volunteer_id ORDER BY v.full_name');
+  res.json({teams,responders});
+}));
+rescueRouter.get(['/missions','/teams','/outcomes'],wrap(async(req,res)=>{
+  const resource=req.path.slice(1);
+  const {page,pageSize,search,sortBy,sortOrder,filter_status}=z.object({page:z.coerce.number().int().min(1).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(20),search:z.string().trim().max(160).default(''),sortBy:z.enum(['name','updated','status']).default('updated'),sortOrder:z.enum(['asc','desc']).default('desc'),filter_status:z.string().default('')}).parse(req.query);
+  let from='',where='',columns='',sort='';let params:unknown[]=[];
+  if(resource==='missions'){
+    const status=z.enum(['','Active','Completed','Dispatched','At pickup','Transporting','Blocked','Arrived','Cancelled']).parse(filter_status);
+    from='FROM rescue_missions m';columns='m.*';where=`WHERE (m.pickup LIKE ? OR m.shelter_name LIKE ? OR m.team_snapshot LIKE ? OR m.residents LIKE ?)`;params=Array(4).fill(`%${search}%`);
+    if(status==='Active')where+=" AND m.status NOT IN ('Arrived','Cancelled')";else if(status==='Completed')where+=" AND m.status IN ('Arrived','Cancelled')";else if(status){where+=' AND m.status=?';params.push(status);}
+    sort={name:"JSON_UNQUOTE(JSON_EXTRACT(m.team_snapshot,'$.name'))",updated:'m.updated_at',status:'m.status'}[sortBy]+` ${sortOrder},m.mission_id`;
+  }else if(resource==='teams'){
+    const status=z.enum(['','Available','Out of service','On mission']).parse(filter_status);
+    from=teamFrom;columns='t.*,m.mission_id active_mission_id';where='WHERE (t.name LIKE ? OR t.leader LIKE ? OR t.vehicle LIKE ?)';params=Array(3).fill(`%${search}%`);
+    if(status==='On mission')where+=' AND m.mission_id IS NOT NULL';else if(status){where+=' AND t.availability=? AND m.mission_id IS NULL';params.push(status);}
+    sort={name:'t.name',updated:'t.created_at',status:'t.availability'}[sortBy]+` ${sortOrder},t.team_id`;
+  }else{
+    const status=z.enum(['','Missing','Located','Deceased']).parse(filter_status);
+    from=outcomeFrom;columns='o.*,r.full_name,h.household_number,z.zone_name';where='WHERE (r.full_name LIKE ? OR h.household_number LIKE ? OR z.zone_name LIKE ? OR o.last_seen_location LIKE ?)';params=Array(4).fill(`%${search}%`);
+    if(status){where+=' AND o.outcome=?';params.push(status);}sort={name:'r.full_name',updated:'o.updated_at',status:'o.outcome'}[sortBy]+` ${sortOrder},o.resident_id`;
+  }
+  const [[count]]=await db.query<any[]>(`SELECT COUNT(*) total ${from} ${where}`,params);
+  let [items]=await db.query<any[]>(`SELECT ${columns} ${from} ${where} ORDER BY ${sort} LIMIT ? OFFSET ?`,[...params,pageSize,(page-1)*pageSize]);
+  if(resource==='teams')await roster(items);else if(resource==='missions')items=await hydrateMissions(items);else items=items.map(o=>({...o,history:[]}));
+  res.json({items,page,pageSize,totalItems:Number(count.total),totalPages:Math.ceil(count.total/pageSize)});
+}));
+rescueRouter.get('/missions/:id',wrap(async(req,res)=>{
+  const id=z.string().uuid().parse(req.params.id),[rows]=await db.query<any[]>('SELECT * FROM rescue_missions WHERE mission_id=?',[id]);if(!rows.length)fail('Mission not found.',404);
+  const [mission]=await hydrateMissions(rows);
+  const [updates]=await db.query<any[]>("SELECT u.*,COALESCE(a.full_name,'Former user') recorded_by FROM rescue_updates u LEFT JOIN users a ON a.user_id=u.recorded_by_user_id WHERE mission_id=? ORDER BY u.update_id",[id]);
+  res.json({...mission,updates});
+}));
+rescueRouter.get('/outcomes/:id',wrap(async(req,res)=>{
+  const id=z.string().uuid().parse(req.params.id),[rows]=await db.query<any[]>(`SELECT o.*,r.full_name,h.household_number,z.zone_name ${outcomeFrom} WHERE o.resident_id=?`,[id]);
+  const [history]=await db.query<any[]>("SELECT u.*,COALESCE(a.full_name,'Former user') recorded_by FROM resident_outcome_updates u LEFT JOIN users a ON a.user_id=u.recorded_by_user_id WHERE resident_id=? ORDER BY u.update_id",[id]);
+  res.json(rows.length?{...rows[0],history}:null);
+}));
+// Keep the original board response for existing clients; the UI uses paged lists and summary refreshes.
 rescueRouter.get('/',wrap(async(_req,res)=>{
   const [teams]=await db.query<any[]>(`SELECT t.*,m.mission_id active_mission_id FROM rescue_teams t LEFT JOIN rescue_missions m ON m.team_id=t.team_id AND m.status NOT IN ('Arrived','Cancelled') ORDER BY t.name`);
   const [responders]=await db.query<any[]>('SELECT v.*,a.mission_id active_mission_id FROM volunteers v LEFT JOIN rescue_active_responders a ON a.volunteer_id=v.volunteer_id ORDER BY v.full_name');

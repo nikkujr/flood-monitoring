@@ -60,7 +60,7 @@ export interface ResidentYearSummary {
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
-  rescueBoard(){return this.http.get<RescueBoard>(`${this.baseUrl}/rescue`);}
+  rescueBoard(){return this.http.get<RescueBoard>(`${this.baseUrl}/rescue/summary`);}
   addRescueTeam(input:{name:string;leaderId:string;memberIds:string[];vehicle:string;passengerCapacity:number}){return this.http.post<{message:string}>(`${this.baseUrl}/rescue/teams`,input);}
   editRescueTeam(id:string,input:{name:string;leaderId:string;memberIds:string[];vehicle:string;passengerCapacity:number}){return this.http.put<{message:string}>(`${this.baseUrl}/rescue/teams/${id}`,input);}
   recordResidentOutcome(id:string,input:{outcome:string;revision:number;source:string;notes:string;lastSeenLocation:string;observedAt:string;confirmed:boolean}){return this.http.post<{message:string}>(`${this.baseUrl}/rescue/outcomes/${id}`,input);}

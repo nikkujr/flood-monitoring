@@ -50,7 +50,6 @@ export class App implements OnInit, OnDestroy {
   menuOpen = false;
   taskQuery = '';
   centerMapOpen = false;
-  centerRecordsOpen = false;
   @ViewChild(DssComponent) private dssWorkspace?: DssComponent;
   get navigationTasks() {
     const tasks: NavigationTask[] = [
@@ -674,31 +673,31 @@ export class App implements OnInit, OnDestroy {
     { id: 'dashboard', label: 'Dashboard', icon: '⌂' },
     { id: 'dss', label: 'Decision Support (DSS)', icon: '◇' },
     { id: 'planner', label: 'Evacuation Planner', icon: '♙' },
-    { id: 'assistance', label: 'Assistance and Shelters', icon: '⌂' },
+    { id: 'assistance', label: 'Assistance Assessment', icon: '⌂' },
     { id: 'map', label: 'Live Map & GIS', icon: '⌖' },
     { id: 'reports', label: 'Flood Reports', icon: '!' },
     { id: 'residents', label: 'Residents', icon: '♙' },
     { id: 'households', label: 'Households', icon: '⌑' },
-    { id: 'evacuation', label: 'Centers & Responders', icon: '⌂' },
+    { id: 'evacuation', label: 'Shelters & Responders', icon: '⌂' },
     { id: 'statistics', label: 'Reports & Statistics', icon: '▥' },
     { id: 'notifications', label: 'Advisories & Hotlines', icon: '♢' },
     { id: 'users', label: 'User Accounts', icon: '⚙' },
     { id: 'registrations', label: 'Resident Approvals', icon: '✓' },
-    { id: 'contacts', label: 'Assistance & Contacts', icon: '♡' }
+    { id: 'contacts', label: 'Requests & Follow-up', icon: '♡' }
   ];
 
   pageDetails: Record<PageId, { eyebrow: string; title: string; description: string; action: string }> = {
-    contacts: {eyebrow:'COMMUNITY OUTREACH',title:'Assistance & Contacts',description:'Review resident requests for help and track household contact and follow-up.',action:''},
+    contacts: {eyebrow:'COMMUNITY OUTREACH',title:'Requests & Follow-up',description:'Review resident requests for help and track household contact and follow-up.',action:''},
     registrations: {eyebrow:'RESIDENT VALIDATION',title:'Resident Approvals',description:'Validate self-registrations and link approved residents to their household records.',action:''},
     dashboard: { eyebrow: 'START HERE', title: 'Dashboard', description: 'See what needs attention and open your next task.', action: '' },
     map: { eyebrow: 'GEOSPATIAL OPERATIONS', title: 'Live Map & GIS', description: 'Review barangay boundaries, risk zones, incidents, routes, and evacuation shelters.', action: 'Add map record' },
     reports: { eyebrow: 'INCIDENT MANAGEMENT', title: 'Flood Reports', description: 'Validate community reports and coordinate a timely response.', action: 'New report' },
     residents: { eyebrow: 'COMMUNITY RECORDS', title: 'Residents', description: 'Manage resident information, vulnerability, and evacuation priority.', action: 'Add resident' },
     households: { eyebrow: 'COMMUNITY RECORDS', title: 'Households', description: 'Organize residents by household, zone, and current risk.', action: 'Add household' },
-    evacuation: { eyebrow: 'FLOOD RESPONSE', title: 'Centers & Responders', description: 'Manage evacuation centers, resident rosters, and responder availability. Dispatch rescue teams in Evacuation Planner.', action: 'Add shelter' },
+    evacuation: { eyebrow: 'FLOOD RESPONSE', title: 'Shelters & Responders', description: 'Manage evacuation centers, resident rosters, and responder availability. Dispatch rescue teams in Evacuation Planner.', action: 'Add shelter' },
     statistics: { eyebrow: 'REPORTING', title: 'Reports & Statistics', description: 'Review incident statistics and flood susceptibility references.', action: 'Export summary' },
     planner: {eyebrow:'EMERGENCY OPERATIONS',title:'Evacuation Planner',description:'Plan evacuation and dispatch rescue teams.',action:''},
-    assistance: {eyebrow:'EMERGENCY OPERATIONS',title:'Assistance and Shelters',description:'Review assistance needs and shelter capacity.',action:''},
+    assistance: {eyebrow:'EMERGENCY OPERATIONS',title:'Assistance Assessment',description:'Review assistance needs and shelter capacity.',action:''},
     dss: { eyebrow: 'DECISION SUPPORT', title: 'Decision Support System', description: 'Assess zone priorities, assistance needs, and shelter readiness.', action: 'Situation report' },
     notifications: { eyebrow: 'FLOOD RESPONSE', title: 'Advisories & Hotlines', description: 'Publish official flood advisories and maintain emergency phone numbers.', action: 'New advisory' },
     users: { eyebrow: 'SYSTEM ADMINISTRATION', title: 'User Accounts', description: 'Manage authorized local authority access and roles.', action: 'Add user' }
@@ -722,7 +721,7 @@ export class App implements OnInit, OnDestroy {
     { name: 'Barangay Multipurpose Hall', used: 94, capacity: 120, percent: 78 },
     { name: 'Upper Colacling Chapel', used: 12, capacity: 80, percent: 15 }
   ];
-  evacuationCenters: Record<string, unknown>[] = [];
+
   selectedEvacuationCenterName = '';
   assignmentOpen = false;
   assignmentCenter?: Record<string, unknown>;
@@ -1533,7 +1532,7 @@ export class App implements OnInit, OnDestroy {
     this.sortBy = page === 'households' ? 'household_sort_key' : '';
     this.sortOrder = page === 'households' ? 'asc' : 'desc';
     this.resourceFilters = {};
-    if (page === 'evacuation') this.loadEvacuationCenters();
+
     this.loadResource();
   }
 
@@ -1544,7 +1543,6 @@ export class App implements OnInit, OnDestroy {
 
   selectResource(resource: string) {
     this.centerMapOpen=false;
-    this.centerRecordsOpen=false;
     this.currentResource = resource;
     if (this.activePage === 'map') this.setAdminMapLayer(resource);
     this.selectedMapFocus = undefined;
@@ -1553,7 +1551,7 @@ export class App implements OnInit, OnDestroy {
     this.sortBy = '';
     this.resourceFilters = {};
     this.selectedEvacuationCenterName = '';
-    if (this.activePage === 'evacuation') this.loadEvacuationCenters();
+
     this.loadResource();
   }
 
@@ -1596,16 +1594,6 @@ export class App implements OnInit, OnDestroy {
     this.adminMapLabelsVisible = !this.adminMapLabelsVisible;
   }
 
-  loadEvacuationCenters() {
-    this.api.list<Record<string, unknown>>('shelters', 1, 100, '', 'shelter_name', 'asc').subscribe({
-      next: ({ items }) => {
-        this.evacuationCenters = items;
-        this.changeDetector.detectChanges();
-      },
-      error: () => this.evacuationCenters = []
-    });
-  }
-
   viewShelterResidents(center: Record<string, unknown>) {
     this.currentResource = 'residents';
     this.page = 1;
@@ -1625,7 +1613,7 @@ export class App implements OnInit, OnDestroy {
     this.api.update('shelters', id, { recordStatus: nextStatus }).pipe(finalize(() => this.finishLoading())).subscribe({
       next: () => {
         this.successMessage = `${center['shelter_name']} is now ${String(nextStatus).toLowerCase()}.`;
-        this.loadEvacuationCenters();
+
         if (this.currentResource === 'shelters') this.loadResource();
         this.mapRefreshNonce++;
       },
@@ -1741,6 +1729,12 @@ export class App implements OnInit, OnDestroy {
     this.loadResource();
   }
 
+  captureResidentArchive(){
+    if(this.loading||this.api.user()?.role!=='Super Admin'||!window.confirm(`Capture ${this.currentResidentYear} live residents and households as the annual archive? This replaces the existing archive for this year. Capture again at year end to keep the final annual record.`))return;
+    this.loading=true;
+    this.api.create<{message:string}>('residents/yearly/capture',{confirmed:true}).pipe(finalize(()=>this.finishLoading())).subscribe({next:r=>{this.successMessage=r.message;this.loadResource();},error:e=>{this.errorMessage=e?.error?.message??'Archive could not be captured.';}});
+  }
+
   applyResidentFilters(zone: string, household: string, vulnerability: string, status: string, priority: string) {
     this.resourceFilters = vulnerability === 'Any'
       ? { zone, household, vulnerable: 'true', status, priority }
@@ -1834,7 +1828,7 @@ export class App implements OnInit, OnDestroy {
       next: ({ message }) => {
         this.closeAssignResidents();
         this.successMessage = message;
-        this.loadEvacuationCenters();
+
         this.loadResource();
       },
       error: (error) => this.errorMessage = error?.error?.message ?? 'Residents could not be assigned.'
@@ -1848,7 +1842,7 @@ export class App implements OnInit, OnDestroy {
       next: ({ message }) => {
         this.successMessage = message;
         this.loadResource();
-        this.loadEvacuationCenters();
+
       },
       error: (error) => this.errorMessage = error?.error?.message ?? 'Resident could not be checked out.'
     });
@@ -2089,7 +2083,7 @@ export class App implements OnInit, OnDestroy {
         if (this.editorOpen && this.editorId === id) this.closeEditor();
         this.successMessage = `${label[0]!.toUpperCase()}${label.slice(1)} deleted successfully.`;
         this.loadResource();
-        if (this.currentResource === 'shelters') this.loadEvacuationCenters();
+
       },
       error: (error) => this.errorMessage = error?.error?.message ?? `The ${label} could not be deleted.`
     });
@@ -2297,7 +2291,7 @@ export class App implements OnInit, OnDestroy {
         const savedResource = this.activePage;
         this.closeEditor();
         this.loadResource();
-        if (this.activePage === 'evacuation') this.loadEvacuationCenters();
+
         if (this.currentResource === 'emergency-contacts') this.loadPublicData();
         this.successMessage = savedResource === 'residents'
           ? `Resident information ${operation} successfully saved.`
@@ -2428,6 +2422,10 @@ export class App implements OnInit, OnDestroy {
 
   reportTableRecord(row: { id: string }) {
     return this.rawRecords.get(row.id) ?? {};
+  }
+
+  shelterSpaces(center:Record<string,unknown>){
+    return center['record_status']!=='Active'||['Full','Unavailable'].includes(String(center['status']))?0:Math.max(0,Number(center['capacity'])-Number(center['resident_occupancy']??0));
   }
 
   reportFloodLevel(row: { id: string }) {

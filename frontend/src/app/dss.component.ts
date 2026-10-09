@@ -63,8 +63,8 @@ export class DssComponent implements OnInit, OnDestroy {
   @ViewChild('responseHeading') responseHeading?:ElementRef<HTMLHeadingElement>;
   setResponseView(view:ResponseView){this.responseView=view;this.responseHeading?.nativeElement.scrollIntoView({block:'start'});this.responseHeading?.nativeElement.focus({preventScroll:true});}
   planPage=1;
-  get planPageCount(){return Math.max(1,Math.ceil(this.visiblePlanRows.length/5));}
-  get pagedPlanRows(){return this.visiblePlanRows.slice((Math.min(this.planPage,this.planPageCount)-1)*5,Math.min(this.planPage,this.planPageCount)*5);}
+  get planPageCount(){return Math.max(1,Math.ceil(this.visiblePlanRows.length/20));}
+  get pagedPlanRows(){return this.visiblePlanRows.slice((Math.min(this.planPage,this.planPageCount)-1)*20,Math.min(this.planPage,this.planPageCount)*20);}
   movePlanPage(delta:number){this.planPage=Math.max(1,Math.min(this.planPageCount,this.planPage+delta));}
   allowOtherZones=true;
   scenarioZone='';
@@ -133,7 +133,7 @@ export class DssComponent implements OnInit, OnDestroy {
     return this.mode === 'dss' ? [
       {id:'overview' as const,label:'Response overview'},
       {id:'zones' as const,label:'Zone assessment'},
-      {id:'evacuation' as const,label:'Assistance & shelters'},
+      {id:'evacuation' as const,label:'Assistance assessment'},
       {id:'planner' as const,label:'Evacuation planner'},
       {id:'methodology' as const,label:'Decision rules'}
     ] : [
@@ -183,7 +183,7 @@ export class DssComponent implements OnInit, OnDestroy {
     });
     if (this.mode === 'planner') this.refreshPlan();
   }
-  get pageTitle() { return {dss:'Decision Support System',statistics:'Reports & Statistics',planner:'Evacuation Planner',assistance:'Assistance and Shelters'}[this.mode]; }
+  get pageTitle() { return {dss:'Decision Support System',statistics:'Reports & Statistics',planner:'Evacuation Planner',assistance:'Assistance Assessment'}[this.mode]; }
   get priorityZones() { return [...(this.data?.zones ?? [])].sort((a,b)=>this.risks.indexOf(b.risk)-this.risks.indexOf(a.risk)||a.name.localeCompare(b.name,undefined,{numeric:true})); }
   ngOnDestroy() { this.subscription?.unsubscribe();this.refresh.complete(); }
   openBulkStatus(zone: DssData['zones'][number], dialog: HTMLDialogElement, viewOnly = false) {

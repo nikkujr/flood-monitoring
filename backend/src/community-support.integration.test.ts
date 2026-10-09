@@ -42,6 +42,10 @@ try{
   const [[open]]=await db.query<any[]>("SELECT COUNT(*) n FROM assistance_requests WHERE resident_id=? AND kind='Need help' AND status!='Closed'",[resident]);assert.equal(open.n,1);
   for(const index of [2,3,4])assert.equal((await request(requests+'?search='+encodeURIComponent(label),'GET',undefined,tokens[index])).totalItems,3);
   await request(requests+'?page=0','GET',undefined,tokens[2],400);
+  await request(requests+'?sortBy=unknown','GET',undefined,tokens[2],400);
+  const sortedQuery='?search='+encodeURIComponent(label)+'&pageSize=1&sortBy=updated&sortOrder=asc';
+  const firstPage=await request(requests+sortedQuery),secondPage=await request(requests+sortedQuery+'&page=2');
+  assert.equal(firstPage.totalItems,3);assert.equal(firstPage.items.length,1);assert.notEqual(firstPage.items[0].request_id,secondPage.items[0].request_id);
   await request(requests+'/'+id,'PUT',{status:'Closed',revision:0,note:'Unverified',confirmed:false},tokens[2],400);
   await request(requests+'/'+id,'PUT',{status:'Acknowledged',revision:0,note:'Called the resident; coordinating assistance.',confirmed:true},tokens[4]);
   await request(requests+'/'+id,'PUT',{status:'Closed',revision:0,note:'Stale update',confirmed:true},tokens[3],409);
@@ -59,6 +63,7 @@ try{
   await request(contacts+'/'+household,'PUT',{...contact,status:'Contacted',revision:1,note:'Spoke to household head in person.'},tokens[4]);
   assert.equal((await request(contacts+'/'+household)).history.length,2);
   const contacted=await request(contacts+'?search='+encodeURIComponent(label)+'&filter_status=Contacted');assert.equal(contacted.items[0].revision,2);assert.equal(contacted.items[0].assigned_user_id,users[4]!.userId);
+  const sortedContacts=await request(contacts+'?search='+encodeURIComponent(label)+'&sortBy=name&sortOrder=asc');assert.equal(sortedContacts.items[0].household_id,household);
   await request('residents/'+resident,'DELETE',undefined,tokens[2],409);
   await db.execute("UPDATE households SET verification_status='Rejected' WHERE household_id=?",[household]);
   await request(mine,'POST',help,tokens[0],403);await request(contacts+'/'+household,'PUT',{...contact,revision:2},tokens[2],409);

@@ -45,6 +45,14 @@ try{
   await request('rescue/missions','POST',{...dispatch([people[2]!]),assistanceRequest},409);
   await db.execute("UPDATE assistance_requests SET status='Submitted' WHERE request_id=?",[assistanceId]);
   const id=(await request('rescue/missions','POST',dispatch(people.slice(0,2)),201)).missionId;
+  const summary=await request('rescue/summary');
+  assert.ok(people.slice(0,2).every(p=>summary.summary.assignedResidentIds.includes(p)));
+  assert.deepEqual(summary.missions,[]);assert.deepEqual(summary.outcomes,[]);
+  const teamPage=await request(`rescue/teams?search=${encodeURIComponent(label)}&pageSize=1&sortBy=name&sortOrder=asc`);
+  assert.equal(teamPage.totalItems,3);assert.equal(teamPage.items.length,1);assert.ok(teamPage.items[0].members.length);
+  const nextTeamPage=await request(`rescue/teams?search=${encodeURIComponent(label)}&pageSize=1&page=2&sortBy=name&sortOrder=asc`);
+  assert.notEqual(teamPage.items[0].team_id,nextTeamPage.items[0].team_id);
+  await request('rescue/teams?sortBy=unknown', 'GET',undefined,400);
   await request(`volunteers/${responders[0]}`,'DELETE',undefined,409);
   assert.equal((await board()).teams.find((t:any)=>t.team_id===teams[0].team_id).active_mission_id,id);
   await request('rescue/missions','POST',dispatch([people[2]!]),409);
@@ -127,6 +135,18 @@ try{
   await request(`rescue/outcomes/${people[2]}`,'POST',{...outcome,outcome:'Deceased',revision:0,notes:'Fictional report after arrival'});
   assert.equal((await mission(mixedId)).residents.find((r:any)=>r.id===people[2]).arrivalStatus,'Arrived');
   const [afterOutcome]=await db.query<any[]>('SELECT current_occupancy FROM shelters WHERE shelter_id=?',[shelter]);assert.equal(afterOutcome[0].current_occupancy,0);
+  const outcomePage=await request(`rescue/outcomes?search=${encodeURIComponent('Test rescue person')}&filter_status=Deceased&pageSize=1`);
+  assert.equal(outcomePage.items.length,1);assert.deepEqual(outcomePage.items[0].history,[]);
+  assert.ok((await request(`rescue/outcomes/${people[0]}`)).history.length);
+  const archiveLabel=`${label} archived`;
+  for(let i=0;i<31;i++)await db.execute("INSERT INTO rescue_missions(mission_id,team_id,shelter_id,pickup,instructions,status,residents,team_snapshot,shelter_name,created_at,updated_at) VALUES(?,?,?,?,'','Cancelled','[]',?,?,'2000-01-01','2000-01-01')",[randomUUID(),teams[0].team_id,shelter,archiveLabel,JSON.stringify(teams[0]),label]);
+  const archivedPage=await request(`rescue/missions?search=${encodeURIComponent(archiveLabel)}&filter_status=Completed&sortBy=updated&pageSize=20`);
+  const olderPage=await request(`rescue/missions?search=${encodeURIComponent(archiveLabel)}&filter_status=Completed&sortBy=updated&pageSize=20&page=2`);
+  assert.equal(archivedPage.totalItems,31);assert.equal(archivedPage.items.length,20);assert.equal(olderPage.items.length,11);
+  assert.equal(new Set([...archivedPage.items,...olderPage.items].map(m=>m.mission_id)).size,31);
+  assert.deepEqual(archivedPage.items[0].updates,[]);
+  assert.ok((await request(`rescue/missions/${mixedId}`)).updates.length);
+  const activePage=await request(`rescue/missions?search=${encodeURIComponent(archiveLabel)}&filter_status=Active`);assert.equal(activePage.totalItems,0);
   console.log('PASS: rescue transitions, no-vehicle teams, concurrency, capacity, mixed arrival/outcome safeguards, historical arrival snapshots, and occupancy after later outcomes.');
 }finally{
   await db.execute('DELETE FROM assistance_request_updates WHERE request_id=?',[assistanceId]);

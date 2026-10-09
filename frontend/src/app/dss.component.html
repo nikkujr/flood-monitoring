@@ -55,7 +55,7 @@
           } @empty {<tr><td [attr.colspan]="bulkViewOnly ? 3 : 4" class="empty">{{preview.residents.length ? 'No residents match this search.' : 'No residents are registered in this zone.'}}</td></tr>}
         </tbody></table>
       </div>
-      @if (!bulkViewOnly) {<p>To mark residents Evacuated, open Centers &amp; Responders to record a confirmed center arrival.</p>}
+      @if (!bulkViewOnly) {<p>To mark residents Evacuated, open Shelters &amp; Responders to record a confirmed center arrival.</p>}
     }
     <div class="filter-actions"><button type="button" class="reset-button" (click)="bulkStatusDialog.close()" [disabled]="bulkSaving">{{bulkViewOnly ? 'Close' : 'Cancel'}}</button>@if (!bulkViewOnly) {<button type="submit" class="apply-filter-button" [disabled]="bulkLoading || bulkSaving || !bulkPreview || !bulkChangedCount">{{bulkSaving ? 'Updating…' : 'Confirm status update'}}</button>}</div>
   </form>
@@ -136,8 +136,8 @@
       <div class="section-heading"><div><h2 #responseHeading id="planner-title" tabindex="-1">Evacuation &amp; rescue</h2><p>Choose residents → Send a team → Update the mission → Confirm arrival.</p></div><button type="button" class="refresh-button" (click)="refreshPlan()" [disabled]="planLoading || arrivalSaving">Refresh live plan</button></div>
       <nav class="response-navigation" aria-label="Rescue workflow">
         <button type="button" [class.active]="responseView==='residents'" [attr.aria-current]="responseView==='residents' ? 'page' : null" (click)="setResponseView('residents')">Choose residents@if(planSelectedIds.size){ · {{planSelectedIds.size}} selected}</button>
-        <button type="button" [class.active]="responseView==='missions'" [attr.aria-current]="responseView==='missions' ? 'page' : null" (click)="setResponseView('missions')">Missions · {{rescueFlow.activeMissions.length}}</button>
-        <button type="button" [class.active]="responseView==='teams'" [attr.aria-current]="responseView==='teams' ? 'page' : null" (click)="setResponseView('teams')">Teams · {{rescueFlow.board?.teams?.length ?? 0}}</button>
+        <button type="button" [class.active]="responseView==='missions'" [attr.aria-current]="responseView==='missions' ? 'page' : null" (click)="setResponseView('missions')">Missions · {{rescueFlow.activeMissionCount}}</button>
+        <button type="button" [class.active]="responseView==='teams'" [attr.aria-current]="responseView==='teams' ? 'page' : null" (click)="setResponseView('teams')">Teams · {{rescueFlow.teamCount}}</button>
         <button type="button" [class.active]="responseView==='outcomes'" [attr.aria-current]="responseView==='outcomes' ? 'page' : null" (click)="setResponseView('outcomes')">Missing &amp; deceased</button>
         <button type="button" [class.active]="responseView==='simulation'" [attr.aria-current]="responseView==='simulation' ? 'page' : null" (click)="setResponseView('simulation')">What if?</button>
       </nav>

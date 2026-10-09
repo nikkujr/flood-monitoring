@@ -20,7 +20,7 @@ export class CommunitySupportComponent implements OnInit,OnDestroy {
   tab:'requests'|'households'='requests';
   items:Record<string,any>[]=[];
   staffMembers:{user_id:string;full_name:string}[]=[];
-  search='';status='';page=1;pages=0;total=0;
+  search='';status='';sortBy='priority';sortOrder:'asc'|'desc'='asc';page=1;pages=0;total=0;
   loading=false;saving=false;error='';success='';historyError='';historyLoading=false;
   checkIn={kind:'Need help',location:'',needs:''};
   selected:Record<string,any>|null=null;
@@ -46,7 +46,7 @@ export class CommunitySupportComponent implements OnInit,OnDestroy {
   filter(){this.page=1;this.load();}
   load(){
     this.listSubscription?.unsubscribe();this.loading=true;
-    const request=this.resident?this.api.get<{items:Record<string,any>[]}>('community-support','mine'):this.api.list<Record<string,any>>(`community-support/${this.tab}`,this.page,20,this.search,'','asc',{status:this.status});
+    const request=this.resident?this.api.get<{items:Record<string,any>[]}>('community-support','mine'):this.api.list<Record<string,any>>(`community-support/${this.tab}`,this.page,20,this.search,this.sortBy,this.sortOrder,{status:this.status});
     this.listSubscription=request.pipe(finalize(()=>{this.loading=false;this.cdr.markForCheck();})).subscribe({
       next:result=>{this.items=result.items;const list=result as any;this.pages=list.totalPages??0;this.total=list.totalItems??result.items.length;this.staffMembers=list.staffMembers??[];if(!this.resident&&this.page>Math.max(1,this.pages)){this.page=Math.max(1,this.pages);this.load();}},
       error:error=>{this.error=error?.error?.message??'Updates could not be loaded. Try refreshing.';}
@@ -57,7 +57,7 @@ export class CommunitySupportComponent implements OnInit,OnDestroy {
     this.subscriptions.add(this.api.create<{message:string}>('community-support/mine',this.checkIn).pipe(finalize(()=>{this.saving=false;this.cdr.markForCheck();})).subscribe({next:result=>{this.success=result.message;this.checkIn={kind:'Need help',location:'',needs:''};this.load();},error:error=>{this.error=error?.error?.message??'Your check-in was not submitted. Try again.';}}));
   }
   open(row:Record<string,any>){
-    this.rescueOpen=true;this.cdr.detectChanges();this.rescueConfirmed=false;this.shelterId='';this.shelterSearch='';if(this.canRescue(row))this.loadShelters();
+    if(this.canRescue(row))this.rescueOpen=true;this.cdr.detectChanges();this.rescueConfirmed=false;this.shelterId='';this.shelterSearch='';if(this.canRescue(row))this.loadShelters();
     this.selected=row;this.review={status:this.tab==='requests'?(row['status']==='Closed'?'Closed':'Acknowledged'):row['status'],assignedUserId:row['assigned_user_id']??'',note:'',confirmed:false};
     this.error='';this.history=[];this.historyError='';this.historyLoading=true;
     this.historySubscription?.unsubscribe();

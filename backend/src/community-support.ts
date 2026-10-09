@@ -36,15 +36,16 @@ communitySupportRouter.post('/mine',requireValidatedResident,wrap(async(req,res)
 }));
 
 function listInput(req:any){
-  return z.object({page:z.coerce.number().int().min(1).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(20),search:z.string().trim().max(160).default('')}).parse(req.query);
+  return z.object({page:z.coerce.number().int().min(1).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(20),search:z.string().trim().max(160).default(''),sortBy:z.enum(['','priority','name','updated','status']).default('priority'),sortOrder:z.enum(['asc','desc']).default('asc')}).parse(req.query);
 }
 communitySupportRouter.get('/requests',staff,wrap(async(req,res)=>{
-  const {page,pageSize,search}=listInput(req);
+  const {page,pageSize,search,sortBy,sortOrder}=listInput(req);
+  const order=sortBy==='priority'||!sortBy?"(a.status='Closed'),(a.kind='Need help') DESC,a.created_at":`${{name:'r.full_name',updated:'a.created_at',status:'a.status'}[sortBy]} ${sortOrder}`;
   const status=z.enum(['','Submitted','Acknowledged','Closed']).parse(req.query.filter_status??'');
-  const where="WHERE (?='' OR a.status=?) AND (r.full_name LIKE ? OR h.household_number LIKE ? OR a.location LIKE ?)";
-  const params=[status,status,...Array(3).fill(`%${search}%`)];
-  const from='FROM assistance_requests a JOIN residents r ON r.resident_id=a.resident_id JOIN households h ON h.household_id=a.household_id';
-  const [items]=await db.query<any[]>(`SELECT a.*,r.full_name,r.contact_number,r.record_status,r.evacuation_status,h.household_number,z.zone_name,o.outcome,ar.mission_id ${from} JOIN zones z ON z.zone_id=h.zone_id LEFT JOIN resident_outcomes o ON o.resident_id=r.resident_id LEFT JOIN rescue_active_residents ar ON ar.resident_id=r.resident_id ${where} ORDER BY (a.status='Closed'),(a.kind='Need help') DESC,a.created_at,a.request_id LIMIT ? OFFSET ?`,[...params,pageSize,(page-1)*pageSize]);
+  const where="WHERE (?='' OR a.status=?) AND (r.full_name LIKE ? OR h.household_number LIKE ? OR a.location LIKE ? OR z.zone_name LIKE ?)";
+  const params=[status,status,...Array(4).fill(`%${search}%`)];
+  const from='FROM assistance_requests a JOIN residents r ON r.resident_id=a.resident_id JOIN households h ON h.household_id=a.household_id JOIN zones z ON z.zone_id=h.zone_id';
+  const [items]=await db.query<any[]>(`SELECT a.*,r.full_name,r.contact_number,r.record_status,r.evacuation_status,h.household_number,z.zone_name,o.outcome,ar.mission_id ${from} LEFT JOIN resident_outcomes o ON o.resident_id=r.resident_id LEFT JOIN rescue_active_residents ar ON ar.resident_id=r.resident_id ${where} ORDER BY ${order},a.request_id LIMIT ? OFFSET ?`,[...params,pageSize,(page-1)*pageSize]);
   const [[count]]=await db.query<any[]>(`SELECT COUNT(*) total ${from} ${where}`,params);
   res.json({items,page,pageSize,totalItems:count.total,totalPages:Math.ceil(count.total/pageSize)});
 }));
@@ -68,7 +69,8 @@ communitySupportRouter.put('/requests/:id',staff,wrap(async(req,res)=>{
 
 communitySupportRouter.get('/households',staff,wrap(async(req,res)=>{
   // ponytail: one ongoing contact state per household; scope contacts to incidents when separate response campaigns are needed.
-  const {page,pageSize,search}=listInput(req);
+  const {page,pageSize,search,sortBy,sortOrder}=listInput(req);
+  const order=sortBy==='priority'||!sortBy?"open_requests DESC,FIELD(COALESCE(c.status,'Not contacted'),'Needs follow-up','Not contacted','Contacted'),priority_members DESC,h.household_number":`${{name:'h.household_number',updated:'c.updated_at',status:"COALESCE(c.status,'Not contacted')"}[sortBy]} ${sortOrder}`;
   const status=z.enum(['','Not contacted','Contacted','Needs follow-up']).parse(req.query.filter_status??'');
   const from="FROM households h JOIN zones z ON z.zone_id=h.zone_id LEFT JOIN household_contacts c ON c.household_id=h.household_id";
   const where="WHERE h.verification_status='Verified' AND EXISTS(SELECT 1 FROM residents r WHERE r.household_id=h.household_id AND r.record_status='Active') AND (?='' OR COALESCE(c.status,'Not contacted')=?) AND (h.household_number LIKE ? OR h.head_of_household_name LIKE ? OR z.zone_name LIKE ?)";
@@ -76,7 +78,7 @@ communitySupportRouter.get('/households',staff,wrap(async(req,res)=>{
   const [items]=await db.query<any[]>(`SELECT h.household_id,h.household_number,h.head_of_household_name,h.address_line,h.contact_number,z.zone_name,COALESCE(c.status,'Not contacted') status,COALESCE(c.revision,0) revision,c.assigned_user_id,c.note,c.updated_at,u.full_name assigned_name,
     (SELECT COUNT(*) FROM assistance_requests a WHERE a.household_id=h.household_id AND a.kind='Need help' AND a.status!='Closed') open_requests,
     (SELECT COUNT(*) FROM residents r WHERE r.household_id=h.household_id AND r.record_status='Active' AND (r.priority_level='High' OR TIMESTAMPDIFF(YEAR,r.date_of_birth,CURDATE())>=60 OR TIMESTAMPDIFF(YEAR,r.date_of_birth,CURDATE())<18)) priority_members
-    ${from} LEFT JOIN users u ON u.user_id=c.assigned_user_id ${where} ORDER BY open_requests DESC,FIELD(COALESCE(c.status,'Not contacted'),'Needs follow-up','Not contacted','Contacted'),priority_members DESC,h.household_number,h.household_id LIMIT ? OFFSET ?`,[...params,pageSize,(page-1)*pageSize]);
+    ${from} LEFT JOIN users u ON u.user_id=c.assigned_user_id ${where} ORDER BY ${order},h.household_id LIMIT ? OFFSET ?`,[...params,pageSize,(page-1)*pageSize]);
   const [[count]]=await db.query<any[]>(`SELECT COUNT(*) total ${from} ${where}`,params);
   const [staffMembers]=await db.query<any[]>("SELECT user_id,full_name FROM users WHERE is_active=1 AND role IN ('Super Admin','Disaster Officer','Data Encoder') ORDER BY full_name");
   res.json({items,staffMembers,page,pageSize,totalItems:count.total,totalPages:Math.ceil(count.total/pageSize)});

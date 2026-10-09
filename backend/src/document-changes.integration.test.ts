@@ -42,6 +42,15 @@ try {
   await request('residents/import','POST',{csv,preview:false,year});
   await request('residents/import','POST',{csv,preview:false,year},400);
   const archive=await request(`residents/yearly?year=${year}&search=${encodeURIComponent(label)}`);assert.equal(archive.items.length,1);
+  const liveYear=Number(new Intl.DateTimeFormat('en',{timeZone:'Asia/Manila',year:'numeric'}).format(new Date()));
+  const [beforeReads]=await db.query<any[]>('SELECT * FROM resident_year_snapshots WHERE household_id=? ORDER BY snapshot_year,resident_id',[household]);
+  const live=await request(`residents/yearly?year=${liveYear}&search=${encodeURIComponent(label)}&filter_vulnerable=true`);
+  assert.equal(live.items[0].resident_id,resident);assert.equal(live.items[0].household_number,number);
+  await request(`residents/yearly?year=${liveYear}&page=2&pageSize=1`);
+  const [afterReads]=await db.query<any[]>('SELECT * FROM resident_year_snapshots WHERE household_id=? ORDER BY snapshot_year,resident_id',[household]);
+  assert.deepEqual(afterReads,beforeReads,'Live reads must leave archives unchanged.');
+  await request('residents/yearly/capture','POST',{confirmed:true},403,encoder);
+  await request('residents/yearly/capture','POST',{},400);
   const [current]=await db.query<any[]>('SELECT resident_id FROM residents WHERE household_id=?',[household]);assert.equal(current.length,1,'Historical import must not write current residents.');
   const badCsv=csv.replace('2000-01-01','2002-01-01');await request('residents/import','POST',{csv:badCsv,preview:true,year},400);
   await request('residents/import','POST',{csv,preview:false,year:new Date().getFullYear()+1},400);

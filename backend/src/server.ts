@@ -1188,7 +1188,8 @@ app.get("/api/residents/yearly", requireAuth, requireRoles("Super Admin", "Disas
   if (!Number.isInteger(requestedYear) || requestedYear < 2000 || requestedYear > currentYear) {
     return res.status(400).json({ message: `Year must be between 2000 and ${currentYear}` });
   }
-  if (requestedYear === currentYear) await refreshCurrentResidentSnapshot();
+  // Live records share the archive shape; browsing must never rewrite an archive.
+  const source = requestedYear === currentYear ? `(SELECT r.*,${currentYear} snapshot_year,h.household_number,h.zone_id,z.zone_name,h.address_line household_address,h.head_of_household_name,r.created_at source_created_at,r.updated_at source_updated_at,NOW() captured_at FROM residents r JOIN households h ON h.household_id=r.household_id JOIN zones z ON z.zone_id=h.zone_id)` : 'resident_year_snapshots';
 
   const { page, pageSize, offset } = pagination(req);
   const search = String(req.query.search ?? "").trim();
@@ -1230,10 +1231,10 @@ app.get("/api/residents/yearly", requireAuth, requireRoles("Super Admin", "Disas
   const [items] = await db.query<any[]>(
     `SELECT r.*,${requestedYear === currentYear ? '(SELECT outcome FROM resident_outcomes o WHERE o.resident_id=r.resident_id)' : 'NULL'} outcome,CAST(r.date_of_birth AS CHAR) date_of_birth,TIMESTAMPDIFF(YEAR,r.date_of_birth,r.captured_at) age,
       (SELECT s.shelter_name FROM shelters s WHERE s.shelter_id=r.evacuation_shelter_id) evacuation_shelter_name
-      FROM resident_year_snapshots r WHERE ${where} ORDER BY ${sortColumn} ${sortOrder.toUpperCase()} LIMIT ? OFFSET ?`,
+      FROM ${source} r WHERE ${where} ORDER BY ${sortColumn} ${sortOrder.toUpperCase()},r.resident_id LIMIT ? OFFSET ?`,
     [...params, pageSize, offset]
   );
-  const [countRows] = await db.query<any[]>(`SELECT COUNT(*) total FROM resident_year_snapshots r WHERE ${where}`, params);
+  const [countRows] = await db.query<any[]>(`SELECT COUNT(*) total FROM ${source} r WHERE ${where}`, params);
   const [summaryRows] = await db.query<any[]>(
     `SELECT COUNT(*) totalResidents,COUNT(DISTINCT household_id) totalHouseholds,
       SUM(priority_level='High') highPriorityResidents,
@@ -1246,7 +1247,7 @@ app.get("/api/residents/yearly", requireAuth, requireRoles("Super Admin", "Disas
         pwd_specify IS NOT NULL AND TRIM(pwd_specify) NOT IN ('','NO','N/A') OR
         morbidity IS NOT NULL AND TRIM(morbidity) NOT IN ('','NO','N/A') OR
         TIMESTAMPDIFF(YEAR,date_of_birth,captured_at) NOT BETWEEN 18 AND 59) vulnerableResidents
-      FROM resident_year_snapshots WHERE snapshot_year=?`, [requestedYear]
+      FROM ${source} r WHERE snapshot_year=?`, [requestedYear]
   );
   const [yearRows] = await db.query<any[]>("SELECT DISTINCT snapshot_year year FROM resident_year_snapshots ORDER BY snapshot_year DESC");
   const recentYears = Array.from({ length: 6 }, (_, index) => currentYear - index);
@@ -1254,6 +1255,12 @@ app.get("/api/residents/yearly", requireAuth, requireRoles("Super Admin", "Disas
   const totalItems = Number(countRows[0]?.total ?? 0);
   const summary = Object.fromEntries(Object.entries(summaryRows[0] ?? {}).map(([key, value]) => [key, Number(value ?? 0)]));
   res.json({ items, page, pageSize, totalItems, totalPages: Math.ceil(totalItems / pageSize), year: requestedYear, currentYear, availableYears, summary });
+}));
+
+app.post('/api/residents/yearly/capture', requireAuth, requireRoles('Super Admin'), asyncRoute(async (req,res) => {
+  z.object({confirmed:z.literal(true)}).strict().parse(req.body);
+  const year=await refreshCurrentResidentSnapshot();
+  res.json({year,message:`${year} resident archive captured.`});
 }));
 
 app.post('/api/residents/import', requireAuth, requireRoles('Super Admin', 'Data Encoder'), asyncRoute(async (req, res) => {

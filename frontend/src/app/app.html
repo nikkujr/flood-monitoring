@@ -429,7 +429,7 @@
         @defer (on immediate){<app-community-support (planner)="setPage('planner')"></app-community-support>}
       } @else if (activePage === 'registrations') {
         <div class="page-heading"><div><span class="eyebrow">RESIDENT VALIDATION</span><h1>Resident Approvals</h1><p>Check the applicant's identity and household before approving flood reporting.</p></div></div>
-        <div class="toolbar"><label>Status<select [(ngModel)]="registrationStatus" (ngModelChange)="loadRegistrations()" [disabled]="registrationLoading"><option>Pending</option><option>Approved</option><option>Rejected</option></select></label><button type="button" class="secondary" [disabled]="registrationLoading" (click)="loadRegistrations(registrationPage)">Refresh</button></div>
+        <div class="approval-filters"><label>Registration status<span class="approval-select"><select [(ngModel)]="registrationStatus" (ngModelChange)="loadRegistrations()" [disabled]="registrationLoading"><option>Pending</option><option>Approved</option><option>Rejected</option></select></span></label><button type="button" class="secondary" [disabled]="registrationLoading" (click)="loadRegistrations(registrationPage)">Refresh</button></div>
         @if(registrationLoading){<p role="status">Loading registrations…</p>}
         @else if(registrationError){<p class="form-error" role="alert">{{registrationError}}</p>}
         @else {
@@ -556,6 +556,7 @@
                 <button type="button" class="secondary" id="resident-import-trigger" (click)="openResidentImport()">Import residents</button>
               }
               <label class="resident-year-selector"><span>Record year</span><select #residentYear [value]="selectedResidentYear" (change)="selectResidentYear(residentYear.value)">@for (year of residentYears; track year) { <option [value]="year">{{ year }}{{ year === currentResidentYear ? ' · Current' : '' }}</option> }</select></label>
+              @if(!isHistoricalResidentYear&&api.user()?.role==='Super Admin'){<button type="button" class="secondary" (click)="captureResidentArchive()" [disabled]="loading">Capture annual archive</button>}
             }
             @if (activePage === 'reports') {
               <div class="filter-menu">
@@ -611,7 +612,7 @@
         </div>
         @if (activePage === 'residents') {
           <details class="workspace-disclosure resident-summary-disclosure"><summary>{{selectedResidentYear}} resident summary · {{residentYearSummary.totalResidents}} residents · {{residentYearSummary.highPriorityResidents}} high priority</summary><section class="resident-year-overview" aria-label="Resident summary for selected year">
-            <div class="resident-year-heading"><div><span class="eyebrow">ANNUAL RESIDENT SNAPSHOT</span><h2>{{ selectedResidentYear }} resident records</h2><p>{{ isHistoricalResidentYear ? 'Historical snapshot. Later profile changes do not alter these records.' : 'Current-year snapshot synchronized with the live resident registry.' }}</p></div>@if (isHistoricalResidentYear) { <span class="snapshot-badge">Archived records</span> }</div>
+            <div class="resident-year-heading"><div><span class="eyebrow">ANNUAL RESIDENT RECORDS</span><h2>{{ selectedResidentYear }} resident records</h2><p>{{ isHistoricalResidentYear ? 'Historical snapshot. Later profile changes do not alter these records.' : 'Live resident registry. Searching and browsing do not change annual archives.' }}</p></div>@if (isHistoricalResidentYear) { <span class="snapshot-badge">Archived records</span> }</div>
             <div class="resident-summary-cards">
               <button type="button" (click)="openResidentSummary('residents')" [class.active]="!activeResourceFilterCount" aria-label="Show all resident records"><i class="resident-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></i><span>Residents</span><b>{{ residentYearSummary.totalResidents }}</b><small>Registered people</small><em aria-hidden="true">→</em></button>
               <button type="button" (click)="openResidentSummary('households')" aria-label="Open household records"><i class="resident-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11 12 3l9 8M5 10v11h14V10M9 21v-6h6v6"/></svg></i><span>Households</span><b>{{ residentYearSummary.totalHouseholds }}</b><small>Household records</small><em aria-hidden="true">→</em></button>
@@ -642,23 +643,6 @@
 
             @if (currentResource === 'residents' && selectedEvacuationCenterName) { <div class="selected-center-banner"><span>Resident roster</span><b>{{ selectedEvacuationCenterName }}</b><button type="button" (click)="selectResource('residents')">Show all residents</button></div> }
             @if (currentResource === 'shelters') {
-              <section class="evacuation-center-overview" aria-label="Evacuation centers">
-                <div class="evacuation-center-heading"><div><span class="eyebrow">EVACUATION CENTERS</span><h2>Resident occupancy</h2><p>Select a center to view its exact resident roster.</p></div><span>{{ evacuationCenters.length }} centers</span></div>
-                <div class="evacuation-center-cards">
-                  @for (center of evacuationCenters; track center['shelter_id']) {
-                    <article class="evacuation-center-card" [class.inactive]="center['record_status'] === 'Inactive'">
-                      <button type="button" class="center-card-main" (click)="viewShelterResidents(center)">
-                        <span class="center-status" [class.off]="center['record_status'] === 'Inactive'">{{ center['record_status'] === 'Inactive' ? 'OFF' : 'ACTIVE' }}</span>
-                        <h3>{{ center['shelter_name'] }}</h3><p>{{ displayLocation(center['location_text']) }}</p>
-                        <strong>{{ center['resident_occupancy'] ?? 0 }} <small>of {{ center['capacity'] }} residents</small></strong>
-                        <span class="center-progress"><i [style.width.%]="+(center['capacity'] || 0) > 0 ? (+(center['resident_occupancy'] || 0) / +(center['capacity'] || 1) * 100) : 0"></i></span>
-                        <b>View resident list →</b>
-                      </button>
-                      <div class="center-card-actions"><button type="button" class="center-assign" (click)="openAssignResidents(center, $event)" [disabled]="loading || center['record_status'] !== 'Active' || (center['status'] === 'Unavailable' || center['status'] === 'Full') || +(center['resident_occupancy'] || 0) >= +(center['capacity'] || 0)">Assign Residents</button><button type="button" class="center-toggle" (click)="toggleEvacuationCenter(center, $event)" [disabled]="loading">{{ center['record_status'] === 'Active' ? 'Deactivate' : 'Activate' }}</button></div>
-                    </article>
-                  } @empty { <div class="table-feedback">No evacuation centers have been added.</div> }
-                </div>
-              </section>
               <details #centerMap class="workspace-disclosure center-map-disclosure" [open]="centerMapOpen" (toggle)="centerMapOpen = centerMap.open"><summary>View evacuation centers on the map</summary>@if(centerMapOpen){<app-live-map [full]="true" [visibleLayers]="evacuationMapLayers" [focusRecord]="selectedMapFocus" [refreshNonce]="mapRefreshNonce"></app-live-map>}</details>
             }
           }
@@ -708,8 +692,13 @@
             </div>
             <nav class="pagination" aria-label="Record pages"><span>Page {{ page }} of {{ totalPages }} · {{ totalItems }} records</span><div><button type="button" aria-label="Previous page" [disabled]="loading || page <= 1" (click)="changePage(page - 1)">‹</button><button type="button" class="active" aria-current="page">{{ page }}</button><button type="button" aria-label="Next page" [disabled]="loading || page >= totalPages" (click)="changePage(page + 1)">›</button></div></nav>
           } @else {
-            @if(activePage === 'evacuation' && currentResource === 'shelters'){<button type="button" class="center-records-toggle" [attr.aria-expanded]="centerRecordsOpen" (click)="centerRecordsOpen = !centerRecordsOpen">{{centerRecordsOpen ? 'Hide center records' : 'Manage center records · Edit or remove a center'}} <span aria-hidden="true">{{centerRecordsOpen ? '−' : '+'}}</span></button>}
-            @if(activePage !== 'evacuation' || currentResource !== 'shelters' || centerRecordsOpen){
+            @if(activePage === 'evacuation' && currentResource === 'shelters'){
+              <div class="compact-records" tabindex="0" aria-label="Shelters; scroll horizontally for all columns">
+                <table><caption>Shelters and resident occupancy</caption><thead><tr><th scope="col"><button type="button" (click)="sortColumn('shelter_name')">Shelter {{sortIndicator('shelter_name')}}</button></th><th scope="col">Capacity</th><th scope="col">Occupied</th><th scope="col">Available</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead><tbody>
+                  @for(row of tableRows;track row.id){@let center=reportTableRecord(row);<tr><td><b>{{row.name}}</b><small>{{displayLocation(center['location_text'])}}</small></td><td>{{center['capacity']}}</td><td>{{center['resident_occupancy']??0}}</td><td>{{shelterSpaces(center)}}</td><td>{{center['record_status']==='Inactive'?'Inactive':center['status']}}</td><td><button type="button" class="primary" (click)="viewShelterResidents(center)">View roster</button>@if(canManageCurrentResource){<button type="button" (click)="openAssignResidents(center,$event)" [disabled]="loading||!shelterSpaces(center)" [title]="shelterSpaces(center)?'Record verified shelter arrivals':'Shelter inactive, full, or unavailable'">Assign residents</button><button type="button" (click)="openEditor(row)">Edit shelter</button><details><summary>More actions</summary><button type="button" (click)="toggleEvacuationCenter(center,$event)" [disabled]="loading">{{center['record_status']==='Active'?'Deactivate':'Activate'}}</button><button type="button" (click)="deleteEvacuationRecord(row.id)" [disabled]="loading">Delete shelter</button></details>}</td></tr>}@empty{<tr><td colspan="6">{{loading?'Loading shelters…':resourceLoadError||'No matching shelters.'}}</td></tr>}
+                </tbody></table>
+              </div>
+            }@else{
             <div class="data-table" [class.shelter-table]="activePage === 'evacuation' && currentResource === 'shelters'" [class.household-table]="activePage === 'households' || activePage === 'residents'" [class.hotline-table]="currentResource === 'emergency-contacts'" [class.flood-report-table]="activePage === 'reports'">
               <div class="table-head">@for (column of tableSortColumns; track column.label) { @if (column.label === 'DETAILS') { <span>{{ column.label }}</span> } @else { <button type="button" (click)="sortColumn(column.field)" [attr.aria-label]="'Sort by ' + column.label">{{ column.label }} <i>{{ sortIndicator(column.field) }}</i></button> } }<span class="actions-heading">Actions</span></div>
               @if (loading) { <div class="table-feedback" role="status">Loading records…</div> }
