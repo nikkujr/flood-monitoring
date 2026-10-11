@@ -28,6 +28,33 @@ try {
     await connection.query(`DROP DATABASE IF EXISTS \`${databaseName}\``);
   }
 
+  if (mode === "init") {
+    const [registrationTables] = await connection.query<mysql.RowDataPacket[]>(
+      "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME='resident_registrations'",
+      [databaseName]
+    );
+    if (registrationTables.length) {
+      const [registrationUserColumns] = await connection.query<mysql.RowDataPacket[]>(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='resident_registrations' AND COLUMN_NAME='user_id'",
+        [databaseName]
+      );
+      if (!registrationUserColumns.length) {
+        const legacyTable = "resident_registrations_legacy_20261009";
+        const [legacyTables] = await connection.query<mysql.RowDataPacket[]>(
+          "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?",
+          [databaseName, legacyTable]
+        );
+        if (legacyTables.length) {
+          throw new Error(`Cannot preserve the legacy resident registrations because ${legacyTable} already exists.`);
+        }
+        await connection.query(
+          `RENAME TABLE \`${databaseName}\`.resident_registrations TO \`${databaseName}\`.\`${legacyTable}\``
+        );
+        console.log(`Preserved the previous resident registrations as ${legacyTable}.`);
+      }
+    }
+  }
+
   const schemaTemplate = await readFile(new URL("../sql/schema.sql", import.meta.url), "utf8");
   const schema = schemaTemplate
     .replace("CREATE DATABASE IF NOT EXISTS bantay_baha", `CREATE DATABASE IF NOT EXISTS \`${databaseName}\``)

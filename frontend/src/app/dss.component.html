@@ -69,7 +69,7 @@
   @if (mode === 'dss') {
     <section class="panel"><div class="section-heading"><div><h2>Priority Areas and Recommended Actions</h2><p>Highest risk first · Automatically assessed from active validated reports and household records.</p></div></div>
       <div class="table-scroll" tabindex="0" role="region" aria-label="Priority areas table"><table><thead><tr><th>Zone</th><th>Risk level</th><th>Basis</th><th>Recommended action</th></tr></thead><tbody>
-        @for(zone of priorityZones;track zone.id){<tr><td><b>{{zone.name}}</b></td><td><span class="badge" [attr.data-risk]="level(zone.risk)">{{zone.risk}}</span></td><td>{{zone.explanation}}<details class="risk-evidence"><summary>Supporting evidence</summary><p>{{zone.rule}}</p><ul>@for(report of zone.evidence;track report.id){<li>{{report.code}} · {{report.severity}}</li>} @empty {<li>No active validated reports.</li>}</ul><button type="button" class="refresh-button zone-status-action" (click)="openBulkStatus(zone,bulkStatusDialog,true)">View residents</button>@if(zone.risk === 'Critical' && canMarkResidents){<button type="button" class="refresh-button zone-status-action" (click)="openBulkStatus(zone,bulkStatusDialog)">Mark residents</button>}</details></td><td>{{zone.response}}</td></tr>} @empty {<tr><td colspan="4" class="empty">No zones match the assessment filters.</td></tr>}
+        @for(zone of priorityZones;track zone.id){<tr><td><b>{{zone.name}}</b></td><td><span class="badge" [attr.data-risk]="level(zone.risk)">{{zone.risk}}</span></td><td>{{zone.explanation}}<details class="risk-evidence"><summary>Supporting evidence</summary><p>{{zone.rule}}</p><ul>@for(report of zone.evidence;track report.id){<li>{{report.code}} · {{report.severity}}</li>} @empty {<li>No active validated reports.</li>}</ul><button type="button" class="refresh-button zone-status-action" (click)="openBulkStatus(zone,bulkStatusDialog,true)">View residents</button></details></td><td>{{zone.response}}</td></tr>} @empty {<tr><td colspan="4" class="empty">No zones match the assessment filters.</td></tr>}
       </tbody></table></div>
     </section>
     <section class="panel"><div class="section-heading"><div><h2>Priority Households</h2><p>Households with residents needing assistance, highest priority first.</p></div></div>
@@ -110,6 +110,25 @@
       } @else {<p class="empty">No zone data matches this assessment scope.</p>}
     </article>
   </section>
+  @if (mode === 'statistics') {
+  <section class="panel weekly-report statistics-tab-panel" [hidden]="activeTab !== 'reports'" aria-labelledby="weekly-report-heading">
+    <div class="weekly-report-header">
+      <div><span class="eyebrow">RECORDED INCIDENT SUMMARY</span><h2 id="weekly-report-heading">Weekly Flood Monitoring Report</h2><p>Summarizes incident reports recorded during the selected Monday-to-Sunday period. It does not predict future floods.</p></div>
+      <div class="weekly-report-actions"><label>Choose a date within the week<input type="date" [ngModel]="weeklyDate" (ngModelChange)="changeWeeklyDate($event)" [disabled]="loading" /></label><button type="button" class="refresh-button" (click)="printWeeklyReport()" [disabled]="loading || !weeklyPeriodApplied">Print / Save PDF</button><button type="button" class="apply-filter-button" (click)="downloadWeeklyReport()" [disabled]="loading || !weeklyPeriodApplied">Download Word</button></div>
+    </div>
+    <p class="weekly-period"><b>Reporting period:</b> {{weeklyPeriod.from | date:'mediumDate':'+0800'}}–{{weeklyPeriod.to | date:'mediumDate':'+0800'}}</p>
+    @if(weeklyDownloadMessage){<p class="notice" role="status">{{weeklyDownloadMessage}}</p>}
+    <div class="weekly-summary" aria-label="Weekly report summary">
+      <span><b>{{weeklySummary.total}}</b>Total records</span><span><b>{{weeklySummary.validated}}</b>Validated</span><span><b>{{weeklySummary.pending}}</b>Pending verification</span><span><b>{{weeklyAffectedZones}}</b>Affected zones</span>
+    </div>
+    <div class="weekly-status"><b>Weekly status: {{weeklyStatus}}</b><span>This classification is based on validated records in the selected week, not a forecast.</span></div>
+    <h3>Daily record summary</h3>
+    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Total records</th><th>Validated</th><th>Pending</th><th>Major</th><th>Affected zones</th></tr></thead><tbody>@for(row of weeklyDailyRows;track row.date){<tr><td>{{row.date | date:'mediumDate':'+0800'}}</td><td>{{row.total}}</td><td>{{row.validated}}</td><td>{{row.pending}}</td><td>{{row.major}}</td><td>{{row.zones.join(', ') || 'None recorded'}}</td></tr>}</tbody></table></div>
+    <h3>Incident records</h3>
+    <div class="table-scroll"><table><thead><tr><th>Tracking code / location</th><th>Type</th><th>Affected zones</th><th>Severity</th><th>Status</th><th>Reported</th></tr></thead><tbody>@for(record of weeklyRecords;track record.id){<tr><td><b>{{record.code}}</b><small>{{record.location}}</small></td><td>{{record.incidentType}}</td><td>{{record.zones.join(', ') || 'Not assigned'}}</td><td>{{record.severity}}</td><td>{{record.status}}</td><td>{{record.createdAt | date:'medium':'+0800'}}</td></tr>}@empty{<tr><td colspan="6" class="empty">No incident reports were recorded during this week.</td></tr>}</tbody></table></div>
+    <footer>The downloadable Word document and printable PDF view contain the summary, daily totals, and incident records shown here. Dates are based on report creation time.</footer>
+  </section>
+  }
   @if (mode === 'statistics') {
   <section class="panel geoanalytics-card statistics-tab-panel" [hidden]="activeTab !== 'zones'" aria-labelledby="geoanalytics-heading">
     <div class="geoanalytics-heading"><div><span class="eyebrow">GEOANALYTICSPH ASSESSMENT SNAPSHOT</span><h2 id="geoanalytics-heading">Total land area prone to flood</h2><p>{{geoAnalyticsLocation.barangay}}, {{geoAnalyticsLocation.municipality}}, {{geoAnalyticsLocation.province}}, {{geoAnalyticsLocation.region}}</p></div><div class="geoanalytics-links"><button type="button" (click)="openHazardMap()">Open hazard map</button><a [href]="geoAnalyticsUrl" target="_blank" rel="noopener noreferrer">Verify source ↗</a></div></div>

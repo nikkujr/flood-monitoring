@@ -17,7 +17,7 @@ export const riskRules = [
   'Repeated incidents means at least two Validated or Resolved report records in a zone in the selected period; records may describe the same event.',
   'Vulnerability includes age 60 or above, age under 18, recorded disability, pregnancy, mobility limitation, other recorded vulnerability, or recorded morbidity. Ages are calculated as of today.',
   'Vulnerable residents: Critical → Highest, High → High, Moderate → Medium, Low → Lower. Non-vulnerable residents: Critical → High, High → Medium, otherwise Lower. A manually recorded High priority raises active-zone priority to at least High.',
-  'Residents explicitly marked For Evacuation stay in the assistance queue until recorded as Evacuated, including residents in Low-risk zones.',
+  'Resident evacuation status follows current zone risk automatically: Low → Safe, Moderate → For Monitoring, and High or Critical → For Evacuation. Confirmed Evacuated, Missing, Deceased, and inactive records are preserved.',
   'Risk uses the complete registered zone population. Vulnerability and evacuation-status filters narrow population counts and lists, not the underlying zone risk.',
   'Shelter availability is capacity minus occupancy for operational centers. Full or Unavailable centers contribute no available spaces; missing occupancy is unknown. Nearly Full means at least 90% occupied or a recorded Near Capacity status.'
 ];
@@ -133,7 +133,7 @@ export function buildDss(source: DssSource, filters: DssFilters = {}, now = new 
   const unmapped = selectedReports.filter(r=>r.status==='Validated' && !links.get(r.report_id)?.size).length;
   const overallRisk = zoneRows.length ? zoneRows.reduce<Risk>((risk,z)=>riskLevels.indexOf(z.risk)>riskLevels.indexOf(risk)?z.risk:risk,'Low') : null;
   const activeCount = selectedReports.filter(r=>r.status==='Validated').length;
-  const incidentRecords = [...selectedReports].sort((a,b)=>b.created_at.localeCompare(a.created_at)).map(r=>({id:r.report_id,code:r.tracking_code,location:r.location_text,severity:r.severity_level,status:r.status,createdAt:r.created_at,zones:[...(links.get(r.report_id)??[])].map(id=>zonesById.get(id)!.zone_name)}));
+  const incidentRecords = [...selectedReports].sort((a,b)=>b.created_at.localeCompare(a.created_at)).map(r=>({id:r.report_id,code:r.tracking_code,location:r.location_text,incidentType:r.incident_type,severity:r.severity_level,status:r.status,createdAt:r.created_at,zones:[...(links.get(r.report_id)??[])].map(id=>zonesById.get(id)!.zone_name)}));
   if (pending) recommendations.push({zone:'Selected reports',risk:overallRisk??'Low',text:`Validate ${pending} pending report(s) before using them to raise assessed risk.`,reason:'Submitted and Under Review reports are unverified.'});
   if (unmapped) recommendations.push({zone:'Unassigned reports',risk:overallRisk??'Low',text:`Assign affected zones to ${unmapped} active validated report(s).`,reason:'These reports cannot contribute to zone risk or resident exposure until zones are linked.'});
   return {generatedAt:now.toISOString(),filters,zoneOptions:source.zones.map(z=>({id:z.zone_id,name:z.zone_name})),rules:riskRules,
@@ -141,7 +141,7 @@ export function buildDss(source: DssSource, filters: DssFilters = {}, now = new 
     metrics:{residents:selectedPeople.length,households:zoneRows.reduce((n,z)=>n+z.households,0),vulnerableResidents:selectedPeople.filter(r=>r.vulnerabilities.length).length,activeReports:activeCount,affectedZones:zoneRows.filter(z=>z.activeReports).length,highRiskZones:zoneRows.filter(z=>['High','Critical'].includes(z.risk)).length,priorityResidents:evacuation.length,affectedVulnerable:zoneRows.reduce((n,z)=>n+z.affectedVulnerable,0)},
     zones:zoneRows,incidents:{total:selectedReports.length,active:activeCount,resolved:selectedReports.filter(r=>r.status==='Resolved').length,pending,rejected:selectedReports.filter(r=>r.status==='Rejected').length,unassignedActive:unmapped,
       bySeverity:['Information','Minor Incident','Major Incident'].map(severity=>({severity,count:selectedReports.filter(r=>r.severity_level===severity).length})),
-      recent:incidentRecords.slice(0,10),activeRecords:incidentRecords.filter(r=>r.status==='Validated')},
+      records:incidentRecords,recent:incidentRecords.slice(0,10),activeRecords:incidentRecords.filter(r=>r.status==='Validated')},
     vulnerable:priorities.filter(r=>r.vulnerabilities.length),evacuation,priorityHouseholds,shelters,recommendations,alerts,
     coverage:{zones:zoneRows.length,registeredPopulationKnown:zoneRows.some(z=>z.populationKnown),missingPopulationZones:zoneRows.filter(z=>!z.populationKnown).map(z=>z.name),unassignedActive:unmapped},
     scope:'Risk is a rule-based assessment of validated reports in the selected date/severity scope, not a flood forecast. Exposure is zone-wide potential exposure, not confirmed affected individuals. Date filters use report creation dates; resident and shelter data are current. Resident filters narrow counts and priority lists; shelter capacity remains physical capacity in selected zones.'};

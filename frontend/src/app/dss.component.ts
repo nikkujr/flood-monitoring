@@ -52,6 +52,9 @@ export class DssComponent implements OnInit, OnDestroy {
   filters: Record<string,string> = emptyFilters();
   draftFilters: Record<string,string> = emptyFilters();
   activeTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology'|'planner' = 'overview';
+  weeklyDate = this.localDate(new Date());
+  weeklyDownloadMessage = '';
+  private weeklyDateInitialized = false;
   planBaseline:DssData|null=null;
   planScenario:DssData|null=null;
   plan:ReturnType<typeof buildEvacuationPlan>|null=null;
@@ -177,6 +180,11 @@ export class DssComponent implements OnInit, OnDestroy {
       this.data=data;
       if (data) {
         this.zoneOptions=data.zoneOptions;
+        if(this.mode==='statistics'&&!this.weeklyDateInitialized&&data.incidents.records.length){
+          this.weeklyDate=data.incidents.records[0]!.createdAt.slice(0,10);
+          this.weeklyDateInitialized=true;
+          if(!this.weeklyPeriodApplied)queueMicrotask(()=>this.applyWeeklyPeriod());
+        }
         for (const kind of ['vulnerable','evacuation','households']) this.pages[kind]=Math.min(this.pages[kind]!,this.pageCount(kind));
       }
       this.cdr.markForCheck();
@@ -306,6 +314,75 @@ export class DssComponent implements OnInit, OnDestroy {
   get zoneAxisTicks() {
     const maximum = this.maxZoneReports;
     return [maximum, maximum * .75, maximum * .5, maximum * .25, 0].map(value => Math.round(value));
+  }
+  private localDate(date: Date) {
+    const shifted=new Date(date.getTime()-date.getTimezoneOffset()*60_000);
+    return shifted.toISOString().slice(0,10);
+  }
+  private weekBounds(value: string) {
+    const date=new Date(`${value}T12:00:00`);
+    const monday=new Date(date);monday.setDate(date.getDate()-((date.getDay()+6)%7));
+    const sunday=new Date(monday);sunday.setDate(monday.getDate()+6);
+    return {from:this.localDate(monday),to:this.localDate(sunday)};
+  }
+  get weeklyPeriod() {return this.weekBounds(this.weeklyDate);}
+  get weeklyPeriodApplied() {const period=this.weeklyPeriod;return this.filters['from']===period.from&&this.filters['to']===period.to;}
+  get weeklyRecords() {const period=this.weeklyPeriod;return (this.data?.incidents.records??[]).filter(record=>{const date=record.createdAt.slice(0,10);return date>=period.from&&date<=period.to;});}
+  get weeklySummary() {
+    const records=this.weeklyRecords;
+    return {total:records.length,validated:records.filter(record=>record.status==='Validated').length,pending:records.filter(record=>['Submitted','Under Review'].includes(record.status)).length,resolved:records.filter(record=>record.status==='Resolved').length,rejected:records.filter(record=>record.status==='Rejected').length};
+  }
+  get weeklyStatus() {
+    const records=this.weeklyRecords.filter(record=>record.status==='Validated');
+    if(records.some(record=>record.severity==='Major Incident'))return 'Major incident recorded';
+    if(records.some(record=>record.severity==='Minor Incident'))return 'Minor incident recorded';
+    return records.length?'Information reports recorded':'No validated incident recorded';
+  }
+  get weeklyAffectedZones() {return new Set(this.weeklyRecords.filter(record=>record.status==='Validated').flatMap(record=>record.zones)).size;}
+  get weeklyDailyRows() {
+    const rows=[] as {date:string;total:number;validated:number;pending:number;major:number;zones:string[]}[];
+    const start=new Date(`${this.weeklyPeriod.from}T12:00:00`);
+    for(let offset=0;offset<7;offset++){
+      const day=new Date(start);day.setDate(start.getDate()+offset);const date=this.localDate(day);
+      const records=this.weeklyRecords.filter(record=>record.createdAt.slice(0,10)===date);
+      rows.push({date,total:records.length,validated:records.filter(record=>record.status==='Validated').length,pending:records.filter(record=>['Submitted','Under Review'].includes(record.status)).length,major:records.filter(record=>record.severity==='Major Incident').length,zones:[...new Set(records.flatMap(record=>record.zones))]});
+    }
+    return rows;
+  }
+  applyWeeklyPeriod() {
+    const {from,to}=this.weeklyPeriod;
+    this.filters={...this.filters,from,to};this.draftFilters={...this.filters};this.weeklyDownloadMessage='';this.changeFilters();
+  }
+  changeWeeklyDate(value: string) {
+    if(!value)return;
+    this.weeklyDate=value;
+    this.applyWeeklyPeriod();
+  }
+  private escapeHtml(value: unknown) {
+    return String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]!));
+  }
+  private weeklyReportMarkup() {
+    if(!this.data)return '';
+    const escape=(value:unknown)=>this.escapeHtml(value);
+    const summary=this.weeklySummary;
+    const dailyRows=this.weeklyDailyRows.map(row=>`<tr><td>${escape(row.date)}</td><td>${row.total}</td><td>${row.validated}</td><td>${row.pending}</td><td>${row.major}</td><td>${escape(row.zones.join(', ')||'None recorded')}</td></tr>`).join('');
+    const incidentRows=this.weeklyRecords.map(record=>`<tr><td><b>${escape(record.code)}</b><br>${escape(record.location)}</td><td>${escape(record.incidentType)}</td><td>${escape(record.zones.join(', ')||'Not assigned')}</td><td>${escape(record.severity)}</td><td>${escape(record.status)}</td><td>${escape(record.createdAt)}</td></tr>`).join('')||'<tr><td colspan="6">No incident reports were recorded during this week.</td></tr>';
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Weekly Flood Monitoring Report</title><style>@page{size:A4 landscape;margin:14mm}body{font-family:Arial,sans-serif;color:#182638;font-size:11pt;line-height:1.4}header{border-bottom:3px solid #182638;margin-bottom:18px}h1{font-size:22pt;margin:5px 0}.subtitle{font-size:9pt;letter-spacing:.5px;font-weight:bold}.summary{display:table;width:100%;table-layout:fixed;margin:18px 0}.summary span{display:table-cell;padding:10px;border:1px solid #ccd5df}.summary b{display:block;font-size:18pt}table{width:100%;border-collapse:collapse;margin:8px 0 18px;font-size:9pt}th,td{padding:7px;border:1px solid #ccd5df;text-align:left;vertical-align:top}th{background:#edf1f5}h2{margin:22px 0 8px;font-size:14pt}footer{border-top:1px solid #ccd5df;padding-top:8px;font-size:8pt;color:#435368}tr{break-inside:avoid}</style></head><body><header><div class="subtitle">BANTAYBAHA · BARANGAY COLACLING, LUPI, CAMARINES SUR</div><h1>Weekly Flood Monitoring Report</h1><p><b>Reporting period:</b> ${escape(this.weeklyPeriod.from)} to ${escape(this.weeklyPeriod.to)}</p><p><b>Generated:</b> ${escape(this.data.generatedAt)}</p></header><div class="summary"><span><b>${summary.total}</b>Total records</span><span><b>${summary.validated}</b>Validated</span><span><b>${summary.pending}</b>Pending verification</span><span><b>${this.weeklyAffectedZones}</b>Affected zones</span></div><p><b>Weekly status:</b> ${escape(this.weeklyStatus)}</p><h2>Daily record summary</h2><table><thead><tr><th>Date</th><th>Total</th><th>Validated</th><th>Pending</th><th>Major</th><th>Affected zones</th></tr></thead><tbody>${dailyRows}</tbody></table><h2>Incident records</h2><table><thead><tr><th>Tracking code / location</th><th>Type</th><th>Affected zones</th><th>Severity</th><th>Status</th><th>Reported</th></tr></thead><tbody>${incidentRows}</tbody></table><footer>Dates are based on report creation time. Validated records are verified reports; pending records require review.</footer></body></html>`;
+  }
+  downloadWeeklyReport() {
+    if(!this.data)return;
+    const url=URL.createObjectURL(new Blob(['\uFEFF',this.weeklyReportMarkup()],{type:'application/msword'}));
+    const link=document.createElement('a');link.href=url;link.download=`weekly-flood-monitoring-${this.weeklyPeriod.from}-to-${this.weeklyPeriod.to}.doc`;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url));
+    this.weeklyDownloadMessage='Weekly report downloaded as a Word document.';
+  }
+  printWeeklyReport() {
+    if(!this.data)return;
+    const className='weekly-report-print';
+    const cleanup=()=>document.body.classList.remove(className);
+    document.body.classList.add(className);
+    window.addEventListener('afterprint',cleanup,{once:true});
+    window.print();
+    setTimeout(cleanup,1000);
   }
   get shelterSummary() {
     const shelters=this.data?.shelters??[];

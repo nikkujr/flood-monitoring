@@ -724,7 +724,7 @@ app.put("/api/flood-reports/:id/status", requireAuth, requireRoles("Super Admin"
   res.status(204).end();
 }));
 
-app.delete("/api/flood-reports/:id", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => {
+app.delete("/api/flood-reports/:id", requireAuth, requireRoles("Super Admin", "Disaster Officer"), asyncRoute(async (req, res) => {
   const reportId = String(req.params.id);
   const connection = await db.getConnection();
   let photoUrls: unknown;
@@ -840,13 +840,13 @@ type ResourceConfig = {
 
 const resources: Record<string, ResourceConfig> = {
   "barangay-zones": {
-    table: "zones", idColumn: "zone_id", readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin"],
+    table: "zones", idColumn: "zone_id", readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin", "Disaster Officer"],
     fields: { zoneName: "zone_name", zoneColor: "zone_color", polygonGeoJson: "polygon_geojson", description: "description" },
     required: ["zoneName", "polygonGeoJson"], jsonFields: ["polygonGeoJson"],
     searchColumns: ["zone_name", "description"], sortFields: ["zone_name", "created_at", "updated_at"]
   },
   "risk-zones": {
-    table: "risk_zones", idColumn: "risk_zone_id", readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin"],
+    table: "risk_zones", idColumn: "risk_zone_id", readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin", "Disaster Officer"],
     fields: { riskZoneName: "risk_zone_name", riskLevel: "risk_level", polygonGeoJson: "polygon_geojson", description: "description" },
     required: ["riskZoneName", "riskLevel", "polygonGeoJson"], jsonFields: ["polygonGeoJson"],
     searchColumns: ["risk_zone_name", "description"], sortFields: ["risk_zone_name", "risk_level", "created_at", "updated_at"]
@@ -866,7 +866,7 @@ const resources: Record<string, ResourceConfig> = {
         WHEN EXISTS(SELECT 1 FROM residents r WHERE r.household_id=h.household_id AND r.evacuation_status!='Evacuated') THEN 'Safe'
         WHEN EXISTS(SELECT 1 FROM residents r WHERE r.household_id=h.household_id) THEN 'Evacuated'
         ELSE 'Safe' END evacuation_status`,
-    readRoles: ["Super Admin", "Data Encoder"], writeRoles: ["Super Admin", "Data Encoder"],
+    readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin", "Disaster Officer", "Data Encoder"],
     fields: { householdNumber: "household_number", zoneId: "zone_id", addressLine: "address_line", headOfHouseholdName: "head_of_household_name", contactNumber: "contact_number", verificationStatus: "verification_status" },
     required: ["householdNumber", "zoneId", "addressLine", "headOfHouseholdName"],
     searchColumns: ["h.household_number", "h.address_line", "h.head_of_household_name", "h.verification_status"], sortFields: ["household_number", "household_sort_key", "address_line", "verification_status", "created_at", "updated_at"],
@@ -1257,13 +1257,13 @@ app.get("/api/residents/yearly", requireAuth, requireRoles("Super Admin", "Disas
   res.json({ items, page, pageSize, totalItems, totalPages: Math.ceil(totalItems / pageSize), year: requestedYear, currentYear, availableYears, summary });
 }));
 
-app.post('/api/residents/yearly/capture', requireAuth, requireRoles('Super Admin'), asyncRoute(async (req,res) => {
+app.post('/api/residents/yearly/capture', requireAuth, requireRoles('Super Admin','Disaster Officer'), asyncRoute(async (req,res) => {
   z.object({confirmed:z.literal(true)}).strict().parse(req.body);
   const year=await refreshCurrentResidentSnapshot();
   res.json({year,message:`${year} resident archive captured.`});
 }));
 
-app.post('/api/residents/import', requireAuth, requireRoles('Super Admin', 'Data Encoder'), asyncRoute(async (req, res) => {
+app.post('/api/residents/import', requireAuth, requireRoles('Super Admin', 'Disaster Officer', 'Data Encoder'), asyncRoute(async (req, res) => {
   const input = z.object({ csv: z.string().min(1).max(500_000), preview: z.boolean(), year: z.number().int().min(2000).max(currentResidentSnapshotYear()).default(currentResidentSnapshotYear()) }).parse(req.body);
   const historical = input.year !== currentResidentSnapshotYear();
   let rows: Record<string, string>[];
@@ -1318,7 +1318,7 @@ app.post('/api/residents/import', requireAuth, requireRoles('Super Admin', 'Data
   } finally { connection.release(); }
 }));
 
-app.get('/api/households/:id/details', requireAuth, requireRoles('Super Admin','Data Encoder'), asyncRoute(async (req,res)=>{
+app.get('/api/households/:id/details', requireAuth, requireRoles('Super Admin','Disaster Officer','Data Encoder'), asyncRoute(async (req,res)=>{
   const [households] = await db.query<any[]>('SELECT h.household_id,h.household_number,h.head_of_household_name,h.address_line,h.contact_number,h.verification_status,h.updated_at,h.zone_id,z.zone_name FROM households h JOIN zones z ON z.zone_id=h.zone_id WHERE h.household_id=? LIMIT 1',[String(req.params.id)]);
   if (!households[0]) return res.status(404).json({message:'Household not found'});
   const [residents] = await db.query<any[]>('SELECT r.*,CAST(r.date_of_birth AS CHAR) date_of_birth,s.shelter_name FROM residents r LEFT JOIN shelters s ON s.shelter_id=r.evacuation_shelter_id WHERE r.household_id=? ORDER BY r.full_name',[String(req.params.id)]);
@@ -1459,7 +1459,7 @@ for (const path of ["residents", "shelters", "volunteers", "evacuation-routes", 
   }));
 }
 
-app.delete("/api/households/:id", requireAuth, requireRoles("Super Admin", "Data Encoder"), asyncRoute(async (req, res) => {
+app.delete("/api/households/:id", requireAuth, requireRoles("Super Admin", "Disaster Officer", "Data Encoder"), asyncRoute(async (req, res) => {
   const householdId = String(req.params.id);
   const [[household]] = await db.query<any[]>("SELECT household_number FROM households WHERE household_id=?", [householdId]);
   if (!household) return res.status(404).json({ message: "Household not found" });
@@ -1473,7 +1473,7 @@ app.delete("/api/households/:id", requireAuth, requireRoles("Super Admin", "Data
   res.status(204).end();
 }));
 
-app.delete("/api/barangay-zones/:id", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => {
+app.delete("/api/barangay-zones/:id", requireAuth, requireRoles("Super Admin", "Disaster Officer"), asyncRoute(async (req, res) => {
   const zoneId = String(req.params.id);
   const connection = await db.getConnection();
   try {
@@ -1521,7 +1521,7 @@ app.delete("/api/barangay-zones/:id", requireAuth, requireRoles("Super Admin"), 
   res.status(204).end();
 }));
 
-app.delete("/api/risk-zones/:id", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => {
+app.delete("/api/risk-zones/:id", requireAuth, requireRoles("Super Admin", "Disaster Officer"), asyncRoute(async (req, res) => {
   const [result] = await db.execute<any>("DELETE FROM risk_zones WHERE risk_zone_id=?", [String(req.params.id)]);
   if (!result.affectedRows) return res.status(404).json({ message: "Risk zone not found" });
   res.status(204).end();

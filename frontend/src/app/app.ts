@@ -813,7 +813,7 @@ export class App implements OnInit, OnDestroy {
   }
   get canManageCurrentResource() {
     if (this.activePage === 'map' && this.currentResource === 'flood-reports') return false;
-    if (this.activePage === 'map' && ['barangay-zones', 'risk-zones'].includes(this.currentResource)) return this.api.user()?.role === 'Super Admin';
+    if (this.activePage === 'map' && ['barangay-zones', 'risk-zones'].includes(this.currentResource)) return ['Super Admin','Disaster Officer'].includes(this.api.user()?.role ?? '');
     return true;
   }
   get editorFields(): EditorField[] {
@@ -945,7 +945,7 @@ export class App implements OnInit, OnDestroy {
       if (item.id === 'registrations') return role === 'Super Admin';
       if (item.id === 'users') return role === 'Super Admin';
       if (['reports', 'notifications'].includes(item.id)) return role === 'Super Admin' || role === 'Disaster Officer';
-      if (['residents', 'households'].includes(item.id)) return role === 'Super Admin' || role === 'Data Encoder';
+      if (['residents', 'households'].includes(item.id)) return role === 'Super Admin' || role === 'Disaster Officer' || role === 'Data Encoder';
       return true;
     });
   }
@@ -1730,7 +1730,7 @@ export class App implements OnInit, OnDestroy {
   }
 
   captureResidentArchive(){
-    if(this.loading||this.api.user()?.role!=='Super Admin'||!window.confirm(`Capture ${this.currentResidentYear} live residents and households as the annual archive? This replaces the existing archive for this year. Capture again at year end to keep the final annual record.`))return;
+    if(this.loading||!['Super Admin','Disaster Officer'].includes(this.api.user()?.role??'')||!window.confirm(`Capture ${this.currentResidentYear} live residents and households as the annual archive? This replaces the existing archive for this year. Capture again at year end to keep the final annual record.`))return;
     this.loading=true;
     this.api.create<{message:string}>('residents/yearly/capture',{confirmed:true}).pipe(finalize(()=>this.finishLoading())).subscribe({next:r=>{this.successMessage=r.message;this.loadResource();},error:e=>{this.errorMessage=e?.error?.message??'Archive could not be captured.';}});
   }
@@ -2308,7 +2308,7 @@ export class App implements OnInit, OnDestroy {
   }
 
   deleteFloodReport(reportId: string) {
-    if (this.activePage !== 'reports' || !reportId || this.api.user()?.role !== 'Super Admin' || this.loading) return;
+    if (this.activePage !== 'reports' || !reportId || !['Super Admin','Disaster Officer'].includes(this.api.user()?.role??'') || this.loading) return;
     const trackingCode = String(this.rawRecords.get(reportId)?.['tracking_code'] ?? reportId);
     if (!window.confirm(`Permanently delete flood report ${trackingCode}? It will disappear from reports and maps. Linked advisories will remain.`)) return;
     this.errorMessage = '';
@@ -2496,7 +2496,7 @@ export class App implements OnInit, OnDestroy {
   }
 
   deleteZone(id: string) {
-    if (!id || !['barangay-zones', 'risk-zones'].includes(this.currentResource) || this.api.user()?.role !== 'Super Admin' || this.loading) return;
+    if (!id || !['barangay-zones', 'risk-zones'].includes(this.currentResource) || !['Super Admin','Disaster Officer'].includes(this.api.user()?.role??'') || this.loading) return;
     const isRiskZone = this.currentResource === 'risk-zones';
     const record = this.rawRecords.get(id);
     const zoneName = String(record?.[isRiskZone ? 'risk_zone_name' : 'zone_name'] ?? `this ${isRiskZone ? 'risk' : 'barangay'} zone`);

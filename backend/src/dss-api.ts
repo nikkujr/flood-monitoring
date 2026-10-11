@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { db } from './db.js';
-import { buildDss, riskLevels, type DssSource } from './dss.js';
+import { assessRisk, buildDss, riskLevels, vulnerabilities, type DssSource, type Report, type Resident } from './dss.js';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v=>!Number.isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0,10)===v,'Invalid date');
 export const dssQuery = z.object({
@@ -12,7 +12,55 @@ export const dssQuery = z.object({
 
 export async function loadDss(query: unknown) {
   const filters = dssQuery.parse(query);
+  await syncZoneEvacuationStatuses();
   return buildDss(await loadDssSource(), filters);
+}
+
+const evacuationStatusForRisk = {
+  Low: 'Safe',
+  Moderate: 'For Monitoring',
+  High: 'For Evacuation',
+  Critical: 'For Evacuation'
+} as const;
+
+/**
+ * Keep operational resident statuses aligned with the live DSS assessment.
+ * Confirmed evacuation and outcome records are deliberately left untouched.
+ */
+export async function syncZoneEvacuationStatuses() {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [zones] = await connection.query<any[]>('SELECT zone_id FROM zones ORDER BY zone_id FOR UPDATE');
+    const [households] = await connection.query<any[]>('SELECT household_id,zone_id FROM households');
+    const [residents] = await connection.query<any[]>(`SELECT r.resident_id,r.household_id,r.full_name,CAST(r.date_of_birth AS CHAR) date_of_birth,r.address_line,
+      r.vulnerability_type,r.vulnerability_other,r.pwd_specify,r.morbidity,r.can_swim,r.house_type,r.priority_level,r.evacuation_status,r.record_status,
+      (SELECT outcome FROM resident_outcomes o WHERE o.resident_id=r.resident_id) outcome
+      FROM residents r FOR UPDATE`);
+    const [reports] = await connection.query<any[]>(`SELECT fr.report_id,fr.status,fr.severity_level,fr.updated_at,frz.zone_id
+      FROM flood_reports fr JOIN flood_report_zones frz ON frz.report_id=fr.report_id
+      WHERE fr.status='Validated' FOR UPDATE`);
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const zoneByHousehold = new Map(households.map(row => [row.household_id, row.zone_id]));
+
+    for (const zone of zones) {
+      const zoneResidents = residents.filter(row => zoneByHousehold.get(row.household_id) === zone.zone_id);
+      const active = zoneResidents.filter(row => row.record_status === 'Active' && !['Missing', 'Deceased'].includes(row.outcome));
+      const vulnerableCount = active.filter(row => vulnerabilities(row as Resident, today).length > 0).length;
+      const risk = assessRisk(reports.filter(row => row.zone_id === zone.zone_id) as Report[], vulnerableCount).risk;
+      const target = evacuationStatusForRisk[risk];
+      const ids = active
+        .filter(row => row.evacuation_status !== 'Evacuated' && row.evacuation_status !== target)
+        .map(row => row.resident_id);
+      if (ids.length) await connection.query('UPDATE residents SET evacuation_status=? WHERE resident_id IN (?)', [target, ids]);
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
 export async function loadDssSource(): Promise<DssSource> {

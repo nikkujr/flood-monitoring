@@ -20,6 +20,17 @@ const connection = await mysql.createConnection({
   multipleStatements: true
 });
 
+const compatibleIdDefinition = (column: mysql.RowDataPacket) => {
+  const type = String(column.COLUMN_TYPE ?? "");
+  const charset = String(column.CHARACTER_SET_NAME ?? "");
+  const collation = String(column.COLLATION_NAME ?? "");
+  if (!/^(?:char|varchar)\(\d+\)$/i.test(type)) throw new Error(`Unsupported identifier type: ${type}`);
+  if (!/^[a-zA-Z0-9_]+$/.test(charset) || !/^[a-zA-Z0-9_]+$/.test(collation)) {
+    throw new Error("The identifier character set or collation is invalid.");
+  }
+  return `${type} CHARACTER SET ${charset} COLLATE ${collation}`;
+};
+
 try {
   const [existingDatabase] = await connection.query<mysql.RowDataPacket[]>(
     "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?",
@@ -35,6 +46,85 @@ try {
   if (!existingUsers.length) {
     throw new Error(`Database "${databaseName}" has no users table. Check DATABASE_URL before migrating.`);
   }
+  const [userIdColumns] = await connection.query<mysql.RowDataPacket[]>(
+    "SELECT COLUMN_TYPE,CHARACTER_SET_NAME,COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='users' AND COLUMN_NAME='user_id'",
+    [databaseName]
+  );
+  if (!userIdColumns.length) throw new Error(`Database "${databaseName}" has no users.user_id column.`);
+  const userIdDefinition = compatibleIdDefinition(userIdColumns[0]!);
+
+  // Older installations used a standalone resident-registration table keyed
+  // by registration_id. The current approval workflow is account-linked and
+  // requires user_id. Preserve the legacy rows instead of dropping them, then
+  // let the current schema create the replacement table below.
+  const [registrationTables] = await connection.query<mysql.RowDataPacket[]>(
+    "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME='resident_registrations'",
+    [databaseName]
+  );
+  if (registrationTables.length) {
+    const [registrationUserColumns] = await connection.query<mysql.RowDataPacket[]>(
+      "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='resident_registrations' AND COLUMN_NAME='user_id'",
+      [databaseName]
+    );
+    if (!registrationUserColumns.length) {
+      const legacyTable = "resident_registrations_legacy_20261009";
+      const [legacyTables] = await connection.query<mysql.RowDataPacket[]>(
+        "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?",
+        [databaseName, legacyTable]
+      );
+      if (legacyTables.length) {
+        throw new Error(`Cannot preserve the legacy resident registrations because ${legacyTable} already exists.`);
+      }
+      await connection.query(
+        `RENAME TABLE \`${databaseName}\`.resident_registrations TO \`${databaseName}\`.\`${legacyTable}\``
+      );
+      console.log(`Preserved the previous resident registrations as ${legacyTable}.`);
+    }
+  }
+
+  const [currentRegistrationTables] = await connection.query<mysql.RowDataPacket[]>(
+    "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME='resident_registrations'",
+    [databaseName]
+  );
+  if (!currentRegistrationTables.length) {
+    await connection.query(`
+      CREATE TABLE \`${databaseName}\`.resident_registrations (
+        user_id ${userIdDefinition} PRIMARY KEY,
+        date_of_birth DATE NOT NULL,
+        contact_number VARCHAR(30) NOT NULL,
+        address_line VARCHAR(255) NOT NULL,
+        household_number VARCHAR(80) NULL,
+        status ENUM('Pending','Approved','Rejected') NOT NULL DEFAULT 'Pending',
+        review_notes VARCHAR(1000) NULL,
+        reviewed_by_user_id ${userIdDefinition} NULL,
+        reviewed_at DATETIME NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+        FOREIGN KEY (reviewed_by_user_id) REFERENCES users(user_id) ON DELETE SET NULL
+      )
+    `);
+  }
+
+  const [residentIdColumns] = await connection.query<mysql.RowDataPacket[]>(
+    "SELECT COLUMN_TYPE,CHARACTER_SET_NAME,COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='residents' AND COLUMN_NAME='resident_id'",
+    [databaseName]
+  );
+  if (!residentIdColumns.length) throw new Error(`Database "${databaseName}" has no residents.resident_id column.`);
+  const residentIdDefinition = compatibleIdDefinition(residentIdColumns[0]!);
+  const [residentAccountTables] = await connection.query<mysql.RowDataPacket[]>(
+    "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME='resident_accounts'",
+    [databaseName]
+  );
+  if (!residentAccountTables.length) {
+    await connection.query(`
+      CREATE TABLE \`${databaseName}\`.resident_accounts (
+        user_id ${userIdDefinition} PRIMARY KEY,
+        resident_id ${residentIdDefinition} NOT NULL UNIQUE,
+        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+        FOREIGN KEY (resident_id) REFERENCES residents(resident_id) ON DELETE CASCADE
+      )
+    `);
+  }
 
   const schemaTemplate = await readFile(new URL("../sql/schema.sql", import.meta.url), "utf8");
   const schema = schemaTemplate
@@ -45,7 +135,7 @@ try {
   const [reporterColumns] = await connection.query<mysql.RowDataPacket[]>(
     "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='flood_reports' AND COLUMN_NAME='reporter_user_id'", [databaseName]
   );
-  if (!reporterColumns.length) await connection.query(`ALTER TABLE \`${databaseName}\`.flood_reports ADD COLUMN reporter_user_id CHAR(36) NULL, ADD FOREIGN KEY (reporter_user_id) REFERENCES users(user_id) ON DELETE SET NULL`);
+  if (!reporterColumns.length) await connection.query(`ALTER TABLE \`${databaseName}\`.flood_reports ADD COLUMN reporter_user_id ${userIdDefinition} NULL, ADD FOREIGN KEY (reporter_user_id) REFERENCES users(user_id) ON DELETE SET NULL`);
   await connection.query(`ALTER TABLE \`${databaseName}\`.rescue_teams MODIFY vehicle VARCHAR(120) NULL`);
 
   for (const [table, column, definition] of [
