@@ -700,7 +700,7 @@ export class App implements OnInit, OnDestroy {
     assistance: {eyebrow:'EMERGENCY OPERATIONS',title:'Assistance Assessment',description:'Review assistance needs and shelter capacity.',action:''},
     dss: { eyebrow: 'DECISION SUPPORT', title: 'Decision Support System', description: 'Assess zone priorities, assistance needs, and shelter readiness.', action: 'Situation report' },
     notifications: { eyebrow: 'FLOOD RESPONSE', title: 'Advisories & Hotlines', description: 'Publish official flood advisories and maintain emergency phone numbers.', action: 'New advisory' },
-    users: { eyebrow: 'SYSTEM ADMINISTRATION', title: 'User Accounts', description: 'Manage authorized local authority access and roles.', action: 'Add user' }
+    users: { eyebrow: 'SYSTEM ADMINISTRATION', title: 'User Accounts', description: 'Manage account access, roles, resident approval links, and login readiness.', action: 'Add user' }
   };
 
   metrics = [
@@ -2640,9 +2640,19 @@ export class App implements OnInit, OnDestroy {
                   : String(row['email'] ?? row['address_line'] ?? row['message'] ?? (row['location_text'] ? this.displayLocation(row['location_text']) : values[2]) ?? ''),
       priorityReason: row['resident_id'] ? this.residentPriorityReason(row, true) : '',
       vulnerabilityReason: row['resident_id'] ? this.residentPriorityReason(row, false) : '',
-      status: String(['Missing','Deceased'].includes(String(row['outcome'])) ? row['outcome'] : row['record_status'] ?? row['verification_status'] ?? row['availability_status'] ?? row['status'] ?? row['risk_level'] ?? row['role'] ?? (row['is_active'] ? 'Active' : 'Inactive')),
+      status: String(row['user_id'] ? this.userAccountStatus(row) : ['Missing','Deceased'].includes(String(row['outcome'])) ? row['outcome'] : row['record_status'] ?? row['verification_status'] ?? row['availability_status'] ?? row['status'] ?? row['risk_level'] ?? row['role'] ?? (row['is_active'] ? 'Active' : 'Inactive')),
       updated: this.formatDate(row['source_updated_at'] ?? row['updated_at'] ?? row['source_created_at'] ?? row['created_at'])
     };
+  }
+
+  private userAccountStatus(row: Record<string, unknown>) {
+    if (!row['is_active']) return `${row['role']} · Inactive`;
+    if (row['role'] !== 'Resident') return String(row['role'] ?? 'Active');
+    if (row['registration_status'] && row['registration_status'] !== 'Approved') return `Resident · ${row['registration_status']}`;
+    if (!row['resident_id']) return 'Resident · Link missing';
+    if (row['linked_resident_status'] !== 'Active') return 'Resident · Record inactive';
+    if (row['linked_household_status'] !== 'Verified') return 'Resident · Household unverified';
+    return 'Resident · Ready';
   }
 
   private residentPriorityReason(row: Record<string, unknown>, includeAssistanceFactors: boolean) {

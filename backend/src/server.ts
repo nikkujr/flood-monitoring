@@ -353,7 +353,7 @@ app.post('/api/auth/register', asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/resident-registrations', requireAuth, requireRoles('Super Admin','Secretary'), asyncRoute(async (req,res) => paginated(res,'resident_registrations s JOIN users u ON u.user_id=s.user_id',req,{
-  columns:'s.*,CAST(s.date_of_birth AS CHAR) date_of_birth,u.full_name,u.username,u.email,u.is_active',
+  columns:'s.*,CAST(s.date_of_birth AS CHAR) date_of_birth,u.full_name,u.username,u.email,u.is_active,(SELECT resident_id FROM resident_accounts a WHERE a.user_id=s.user_id) linked_resident_id',
   searchColumns:['u.full_name','u.username','s.household_number','s.address_line'],sortFields:['s.created_at'],
   filterFields:{status:{column:'s.status',exact:true}}
 })));
@@ -376,9 +376,11 @@ app.post('/api/resident-registrations/:id/review', requireAuth, requireRoles('Su
   const userId=String(req.params.id), connection=await db.getConnection();
   try {
     await connection.beginTransaction();
-    const [requests]=await connection.query<any[]>("SELECT s.status,u.role,u.is_active FROM resident_registrations s JOIN users u ON u.user_id=s.user_id WHERE s.user_id=? FOR UPDATE",[userId]);
+    const [requests]=await connection.query<any[]>("SELECT s.status,u.role,u.is_active,a.resident_id FROM resident_registrations s JOIN users u ON u.user_id=s.user_id LEFT JOIN resident_accounts a ON a.user_id=s.user_id WHERE s.user_id=? FOR UPDATE",[userId]);
     if(!requests[0]) {await connection.rollback();return res.status(404).json({message:'Registration not found.'});}
-    if(requests[0].status!=='Pending' || requests[0].role!=='Resident' || !requests[0].is_active) {await connection.rollback();return res.status(409).json({message:'This registration has changed or the account is inactive. Refresh the review queue.'});}
+    const repairingApprovedLink=requests[0].status==='Approved' && input.status==='Approved' && !requests[0].resident_id;
+    if((requests[0].status!=='Pending' && !repairingApprovedLink) || requests[0].role!=='Resident' || !requests[0].is_active) {await connection.rollback();return res.status(409).json({message:'This registration has changed or the account is inactive. Refresh the review queue.'});}
+    if(repairingApprovedLink && input.newResident) {await connection.rollback();return res.status(400).json({message:'Repair an approved account by linking an existing resident record.'});}
     if(input.status==='Approved') {
       let residentId=input.residentId;
       if(input.newResident) {
@@ -395,11 +397,11 @@ app.post('/api/resident-registrations/:id/review', requireAuth, requireRoles('Su
     await connection.execute('UPDATE resident_registrations SET status=?,review_notes=?,reviewed_by_user_id=?,reviewed_at=NOW() WHERE user_id=?',[input.status,input.notes,req.user!.userId,userId]);
     await connection.commit();
   } catch(error) {await connection.rollback();throw error;} finally {connection.release();}
-  res.json({message:`Resident registration ${input.status.toLowerCase()}.`});
+  res.json({message:`Resident registration ${input.status.toLowerCase()}${input.status==='Approved' ? ' and linked' : ''}.`});
 }));
 
 app.get("/api/users", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => paginated(res, "users", req, {
-  columns: "user_id,full_name,username,email,role,is_active,last_login_at,created_at,updated_at,(SELECT resident_id FROM resident_accounts a WHERE a.user_id=users.user_id) resident_id",
+  columns: "user_id,full_name,username,email,role,is_active,last_login_at,created_at,updated_at,(SELECT resident_id FROM resident_accounts a WHERE a.user_id=users.user_id) resident_id,(SELECT status FROM resident_registrations s WHERE s.user_id=users.user_id) registration_status,(SELECT r.record_status FROM resident_accounts a JOIN residents r ON r.resident_id=a.resident_id WHERE a.user_id=users.user_id) linked_resident_status,(SELECT h.verification_status FROM resident_accounts a JOIN residents r ON r.resident_id=a.resident_id JOIN households h ON h.household_id=r.household_id WHERE a.user_id=users.user_id) linked_household_status",
   searchColumns: ["full_name", "username", "email"],
   sortFields: ["full_name", "username", "email", "role", "is_active", "last_login_at", "created_at"]
 })));

@@ -63,6 +63,16 @@ try {
   const approvedLogin=await request('auth/login','POST',{username:input.username,password:input.password});
   const me=await request('auth/me','GET',undefined,approvedLogin.accessToken);assert.equal(me.registration.status,'Approved');assert.equal(me.resident.resident_id,resident);
   const [audit]=await db.query<any[]>('SELECT reviewed_by_user_id,reviewed_at FROM resident_registrations WHERE user_id=?',[userId]);assert.equal(audit[0].reviewed_by_user_id,secretary);assert.ok(audit[0].reviewed_at);
+  // Older/migrated data can contain an approved registration whose resident
+  // link is missing. It must remain blocked until a secretary explicitly
+  // repairs the link, after which normal login works again.
+  await db.execute('DELETE FROM resident_accounts WHERE user_id=?',[userId]);
+  await request('auth/login','POST',{username:input.username,password:input.password},undefined,403);
+  const approvedQueue=await request('resident-registrations?filter_status=Approved&sortBy=s.created_at','GET',undefined,secretaryToken);
+  const brokenApproval=approvedQueue.items.find((item:any)=>item.user_id===userId);assert.ok(brokenApproval);assert.equal(brokenApproval.linked_resident_id,null);
+  await request(reviewPath,'POST',approve,secretaryToken);
+  await request(reviewPath,'POST',approve,secretaryToken,409);
+  await request('auth/login','POST',{username:input.username,password:input.password});
   reportId=(await request('flood-reports','POST',report,approvedLogin.accessToken,201)).reportId;
   const [reports]=await db.query<any[]>('SELECT reporter_user_id,reporter_name FROM flood_reports WHERE report_id=?',[reportId]);assert.equal(reports[0].reporter_user_id,userId);assert.equal(reports[0].reporter_name,name);
   const rejectedInput={...input,username:`registration-${randomUUID()}`,email:`${randomUUID()}@example.test`};

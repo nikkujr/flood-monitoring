@@ -10,8 +10,23 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 
 export async function assertResidentApproved(user: AuthUser, connection: typeof db | PoolConnection = db) {
   if (user.role !== 'Resident') return;
-  const [rows] = await connection.query<any[]>("SELECT a.user_id FROM resident_accounts a JOIN residents r ON r.resident_id=a.resident_id JOIN households h ON h.household_id=r.household_id WHERE a.user_id=? AND r.record_status='Active' AND h.verification_status='Verified' AND NOT EXISTS(SELECT 1 FROM resident_registrations s WHERE s.user_id=a.user_id AND s.status!='Approved')", [user.userId]);
-  if (!rows.length) throw Object.assign(new Error('Your resident account must be validated and approved by the barangay secretary before you can sign in.'), {status:403});
+  const [rows] = await connection.query<any[]>(
+    "SELECT s.status registration_status,a.resident_id,r.record_status,h.verification_status FROM users u LEFT JOIN resident_registrations s ON s.user_id=u.user_id LEFT JOIN resident_accounts a ON a.user_id=u.user_id LEFT JOIN residents r ON r.resident_id=a.resident_id LEFT JOIN households h ON h.household_id=r.household_id WHERE u.user_id=? LIMIT 1",
+    [user.userId]
+  );
+  const account = rows[0];
+  if (account?.registration_status && account.registration_status !== 'Approved') {
+    throw Object.assign(new Error('Your resident registration is still awaiting approval by the barangay secretary.'), {status:403});
+  }
+  if (!account?.resident_id) {
+    throw Object.assign(new Error('Your approved account is not linked to a resident record. Ask the barangay secretary to repair the resident link.'), {status:403});
+  }
+  if (account.record_status !== 'Active') {
+    throw Object.assign(new Error('Your linked resident record is inactive. Ask the barangay office to reactivate or update it.'), {status:403});
+  }
+  if (account.verification_status !== 'Verified') {
+    throw Object.assign(new Error('Your household must be verified before you can sign in.'), {status:403});
+  }
 }
 
 export function createAccessToken(user: AuthUser) {
