@@ -1,7 +1,7 @@
 import { ChangeDetectorRef, Component, ElementRef, EventEmitter, Input, OnDestroy, OnInit, Output, ViewChild, inject } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { BehaviorSubject, Subscription, catchError, combineLatest, finalize, map, of, switchMap, timer, type Observable } from 'rxjs';
+import { BehaviorSubject, Subscription, catchError, combineLatest, finalize, forkJoin, map, of, switchMap, timer, type Observable } from 'rxjs';
 import { ApiService, type ZoneStatusPreview } from './api.service';
 import type { DssData } from './dss.models';
 import { searchResidents } from './admin-ui';
@@ -12,6 +12,7 @@ import type {ResponseView} from './rescue.models';
 const emptyFilters = (): Record<string,string> => ({
   zone:'', risk:'', from:'', to:'', severity:'', evacuationStatus:'', vulnerability:''
 });
+const philippineDate = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'});
 
 @Component({selector:'app-dss',standalone:true,imports:[FormsModule,DatePipe,RescueComponent],templateUrl:'./dss.component.html',styleUrl:'./dss.component.scss'})
 export class DssComponent implements OnInit, OnDestroy {
@@ -54,7 +55,8 @@ export class DssComponent implements OnInit, OnDestroy {
   activeTab: 'overview'|'zones'|'reports'|'evacuation'|'methodology'|'planner' = 'overview';
   weeklyDate = this.localDate(new Date());
   weeklyDownloadMessage = '';
-  private weeklyDateInitialized = false;
+  weeklyData: DssData | null = null;
+  weeklyError = '';
   planBaseline:DssData|null=null;
   planScenario:DssData|null=null;
   plan:ReturnType<typeof buildEvacuationPlan>|null=null;
@@ -169,22 +171,23 @@ export class DssComponent implements OnInit, OnDestroy {
     this.activeTab = this.mode === 'planner' ? 'planner' : this.mode === 'assistance' ? 'evacuation' : this.mode === 'dss' ? 'overview' : this.initialTab;
     this.subscription = combineLatest([timer(0,30_000),this.refresh]).pipe(switchMap(()=>{
       if (this.filters['from'] && this.filters['to'] && this.filters['from']>this.filters['to']) {
-        this.loading=false;this.error='Start date must not be after end date.';return of(null);
+        this.loading=false;this.error='Start date must not be after end date.';return of({data:null,weeklyData:null});
       }
       this.loading=true; this.error='';
-      return this.api.decisionSupport({...this.filters}).pipe(catchError(error=>{
-        this.error=error?.error?.message ?? 'Decision-support data could not be loaded. Please retry.';
-        return of(null);
-      }),finalize(()=>{this.loading=false;this.cdr.markForCheck();}));
-    })).subscribe(data=>{
+      this.weeklyError='';
+      return forkJoin({
+        data:this.api.decisionSupport({...this.filters}).pipe(catchError(error=>{
+          this.error=error?.error?.message ?? 'Decision-support data could not be loaded. Please retry.';return of(null);
+        })),
+        weeklyData:this.mode==='statistics'?this.api.decisionSupport(this.weeklyPeriod).pipe(catchError(error=>{
+          this.weeklyError=error?.error?.message ?? 'The weekly report could not be loaded. Refresh to retry.';return of(null);
+        })):of(null)
+      }).pipe(finalize(()=>{this.loading=false;this.cdr.markForCheck();}));
+    })).subscribe(({data,weeklyData})=>{
       this.data=data;
+      this.weeklyData=weeklyData;
       if (data) {
         this.zoneOptions=data.zoneOptions;
-        if(this.mode==='statistics'&&!this.weeklyDateInitialized&&data.incidents.records.length){
-          this.weeklyDate=data.incidents.records[0]!.createdAt.slice(0,10);
-          this.weeklyDateInitialized=true;
-          if(!this.weeklyPeriodApplied)queueMicrotask(()=>this.applyWeeklyPeriod());
-        }
         for (const kind of ['vulnerable','evacuation','households']) this.pages[kind]=Math.min(this.pages[kind]!,this.pageCount(kind));
       }
       this.cdr.markForCheck();
@@ -316,18 +319,18 @@ export class DssComponent implements OnInit, OnDestroy {
     return [maximum, maximum * .75, maximum * .5, maximum * .25, 0].map(value => Math.round(value));
   }
   private localDate(date: Date) {
-    const shifted=new Date(date.getTime()-date.getTimezoneOffset()*60_000);
-    return shifted.toISOString().slice(0,10);
+    return philippineDate.format(date);
   }
   private weekBounds(value: string) {
-    const date=new Date(`${value}T12:00:00`);
-    const monday=new Date(date);monday.setDate(date.getDate()-((date.getDay()+6)%7));
-    const sunday=new Date(monday);sunday.setDate(monday.getDate()+6);
+    const date=new Date(`${value}T12:00:00+08:00`);
+    const monday=new Date(date);monday.setUTCDate(date.getUTCDate()-((date.getUTCDay()+6)%7));
+    const sunday=new Date(monday);sunday.setUTCDate(monday.getUTCDate()+6);
     return {from:this.localDate(monday),to:this.localDate(sunday)};
   }
   get weeklyPeriod() {return this.weekBounds(this.weeklyDate);}
-  get weeklyPeriodApplied() {const period=this.weeklyPeriod;return this.filters['from']===period.from&&this.filters['to']===period.to;}
-  get weeklyRecords() {const period=this.weeklyPeriod;return (this.data?.incidents.records??[]).filter(record=>{const date=record.createdAt.slice(0,10);return date>=period.from&&date<=period.to;});}
+  get weeklyPeriodApplied() {const period=this.weeklyPeriod;return !!this.weeklyData&&!this.loading&&this.weeklyData.filters['from']===period.from&&this.weeklyData.filters['to']===period.to;}
+  weeklyRecordDate(value:string) {return /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(value)?value.replace(' ','T')+'+08:00':value;}
+  get weeklyRecords() {const period=this.weeklyPeriod;return (this.weeklyData?.incidents.records??[]).filter(record=>{const date=this.localDate(new Date(this.weeklyRecordDate(record.createdAt)));return date>=period.from&&date<=period.to;});}
   get weeklySummary() {
     const records=this.weeklyRecords;
     return {total:records.length,validated:records.filter(record=>record.status==='Validated').length,pending:records.filter(record=>['Submitted','Under Review'].includes(record.status)).length,resolved:records.filter(record=>record.status==='Resolved').length,rejected:records.filter(record=>record.status==='Rejected').length};
@@ -341,42 +344,44 @@ export class DssComponent implements OnInit, OnDestroy {
   get weeklyAffectedZones() {return new Set(this.weeklyRecords.filter(record=>record.status==='Validated').flatMap(record=>record.zones)).size;}
   get weeklyDailyRows() {
     const rows=[] as {date:string;total:number;validated:number;pending:number;major:number;zones:string[]}[];
-    const start=new Date(`${this.weeklyPeriod.from}T12:00:00`);
+    const start=new Date(`${this.weeklyPeriod.from}T12:00:00+08:00`);
     for(let offset=0;offset<7;offset++){
-      const day=new Date(start);day.setDate(start.getDate()+offset);const date=this.localDate(day);
-      const records=this.weeklyRecords.filter(record=>record.createdAt.slice(0,10)===date);
+      const day=new Date(start);day.setUTCDate(start.getUTCDate()+offset);const date=this.localDate(day);
+      const records=this.weeklyRecords.filter(record=>this.localDate(new Date(this.weeklyRecordDate(record.createdAt)))===date);
       rows.push({date,total:records.length,validated:records.filter(record=>record.status==='Validated').length,pending:records.filter(record=>['Submitted','Under Review'].includes(record.status)).length,major:records.filter(record=>record.severity==='Major Incident').length,zones:[...new Set(records.flatMap(record=>record.zones))]});
     }
     return rows;
   }
   applyWeeklyPeriod() {
-    const {from,to}=this.weeklyPeriod;
-    this.filters={...this.filters,from,to};this.draftFilters={...this.filters};this.weeklyDownloadMessage='';this.changeFilters();
+    this.weeklyData=null;this.weeklyDownloadMessage='';this.reload();
   }
   changeWeeklyDate(value: string) {
-    if(!value)return;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(value)||!Number.isFinite(Date.parse(value)))return;
     this.weeklyDate=value;
     this.applyWeeklyPeriod();
   }
   private escapeHtml(value: unknown) {
     return String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]!));
   }
+  private weeklyTimestamp(value:string) {
+    return new Intl.DateTimeFormat('en-PH',{timeZone:'Asia/Manila',dateStyle:'medium',timeStyle:'medium'}).format(new Date(this.weeklyRecordDate(value)));
+  }
   private weeklyReportMarkup() {
-    if(!this.data)return '';
+    if(!this.weeklyData)return '';
     const escape=(value:unknown)=>this.escapeHtml(value);
     const summary=this.weeklySummary;
     const dailyRows=this.weeklyDailyRows.map(row=>`<tr><td>${escape(row.date)}</td><td>${row.total}</td><td>${row.validated}</td><td>${row.pending}</td><td>${row.major}</td><td>${escape(row.zones.join(', ')||'None recorded')}</td></tr>`).join('');
-    const incidentRows=this.weeklyRecords.map(record=>`<tr><td><b>${escape(record.code)}</b><br>${escape(record.location)}</td><td>${escape(record.incidentType)}</td><td>${escape(record.zones.join(', ')||'Not assigned')}</td><td>${escape(record.severity)}</td><td>${escape(record.status)}</td><td>${escape(record.createdAt)}</td></tr>`).join('')||'<tr><td colspan="6">No incident reports were recorded during this week.</td></tr>';
-    return `<!doctype html><html><head><meta charset="utf-8"><title>Weekly Flood Monitoring Report</title><style>@page{size:A4 landscape;margin:14mm}body{font-family:Arial,sans-serif;color:#182638;font-size:11pt;line-height:1.4}header{border-bottom:3px solid #182638;margin-bottom:18px}h1{font-size:22pt;margin:5px 0}.subtitle{font-size:9pt;letter-spacing:.5px;font-weight:bold}.summary{display:table;width:100%;table-layout:fixed;margin:18px 0}.summary span{display:table-cell;padding:10px;border:1px solid #ccd5df}.summary b{display:block;font-size:18pt}table{width:100%;border-collapse:collapse;margin:8px 0 18px;font-size:9pt}th,td{padding:7px;border:1px solid #ccd5df;text-align:left;vertical-align:top}th{background:#edf1f5}h2{margin:22px 0 8px;font-size:14pt}footer{border-top:1px solid #ccd5df;padding-top:8px;font-size:8pt;color:#435368}tr{break-inside:avoid}</style></head><body><header><div class="subtitle">BANTAYBAHA · BARANGAY COLACLING, LUPI, CAMARINES SUR</div><h1>Weekly Flood Monitoring Report</h1><p><b>Reporting period:</b> ${escape(this.weeklyPeriod.from)} to ${escape(this.weeklyPeriod.to)}</p><p><b>Generated:</b> ${escape(this.data.generatedAt)}</p></header><div class="summary"><span><b>${summary.total}</b>Total records</span><span><b>${summary.validated}</b>Validated</span><span><b>${summary.pending}</b>Pending verification</span><span><b>${this.weeklyAffectedZones}</b>Affected zones</span></div><p><b>Weekly status:</b> ${escape(this.weeklyStatus)}</p><h2>Daily record summary</h2><table><thead><tr><th>Date</th><th>Total</th><th>Validated</th><th>Pending</th><th>Major</th><th>Affected zones</th></tr></thead><tbody>${dailyRows}</tbody></table><h2>Incident records</h2><table><thead><tr><th>Tracking code / location</th><th>Type</th><th>Affected zones</th><th>Severity</th><th>Status</th><th>Reported</th></tr></thead><tbody>${incidentRows}</tbody></table><footer>Dates are based on report creation time. Validated records are verified reports; pending records require review.</footer></body></html>`;
+    const incidentRows=this.weeklyRecords.map(record=>`<tr><td><b>${escape(record.code)}</b><br>${escape(record.location)}</td><td>${escape(record.incidentType)}</td><td>${escape(record.zones.join(', ')||'Not assigned')}</td><td>${escape(record.severity)}</td><td>${escape(record.status)}</td><td>${escape(this.weeklyTimestamp(record.createdAt))}</td></tr>`).join('')||'<tr><td colspan="6">No incident reports were recorded during this week.</td></tr>';
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Weekly Flood Monitoring Report</title><style>@page{size:A4 landscape;margin:14mm}body{font-family:Arial,sans-serif;color:#182638;font-size:11pt;line-height:1.4}header{border-bottom:3px solid #182638;margin-bottom:18px}h1{font-size:22pt;margin:5px 0}.subtitle{font-size:9pt;letter-spacing:.5px;font-weight:bold}.summary{display:table;width:100%;table-layout:fixed;margin:18px 0}.summary span{display:table-cell;padding:10px;border:1px solid #ccd5df}.summary b{display:block;font-size:18pt}table{width:100%;border-collapse:collapse;margin:8px 0 18px;font-size:9pt}th,td{padding:7px;border:1px solid #ccd5df;text-align:left;vertical-align:top}th{background:#edf1f5}h2{margin:22px 0 8px;font-size:14pt}footer{border-top:1px solid #ccd5df;padding-top:8px;font-size:8pt;color:#435368}tr{break-inside:avoid}</style></head><body><header><div class="subtitle">BANTAYBAHA · BARANGAY COLACLING, LUPI, CAMARINES SUR</div><h1>Weekly Flood Monitoring Report</h1><p><b>Reporting period:</b> ${escape(this.weeklyPeriod.from)} to ${escape(this.weeklyPeriod.to)}</p><p><b>Generated:</b> ${escape(this.weeklyTimestamp(this.weeklyData.generatedAt))}</p></header><div class="summary"><span><b>${summary.total}</b>Total records</span><span><b>${summary.validated}</b>Validated</span><span><b>${summary.pending}</b>Pending verification</span><span><b>${this.weeklyAffectedZones}</b>Affected zones</span></div><p><b>Weekly status:</b> ${escape(this.weeklyStatus)}</p><h2>Daily record summary</h2><table><thead><tr><th>Date</th><th>Total</th><th>Validated</th><th>Pending</th><th>Major</th><th>Affected zones</th></tr></thead><tbody>${dailyRows}</tbody></table><h2>Incident records</h2><table><thead><tr><th>Tracking code / location</th><th>Type</th><th>Affected zones</th><th>Severity</th><th>Status</th><th>Reported</th></tr></thead><tbody>${incidentRows}</tbody></table><footer>Dates are based on report creation time. Validated records are verified reports; pending records require review.</footer></body></html>`;
   }
   downloadWeeklyReport() {
-    if(!this.data)return;
+    if(!this.weeklyPeriodApplied)return;
     const url=URL.createObjectURL(new Blob(['\uFEFF',this.weeklyReportMarkup()],{type:'application/msword'}));
     const link=document.createElement('a');link.href=url;link.download=`weekly-flood-monitoring-${this.weeklyPeriod.from}-to-${this.weeklyPeriod.to}.doc`;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url));
     this.weeklyDownloadMessage='Weekly report downloaded as a Word document.';
   }
   printWeeklyReport() {
-    if(!this.data)return;
+    if(!this.weeklyPeriodApplied)return;
     const className='weekly-report-print';
     const cleanup=()=>document.body.classList.remove(className);
     document.body.classList.add(className);

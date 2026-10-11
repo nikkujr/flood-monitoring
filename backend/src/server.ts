@@ -12,6 +12,7 @@ import { z } from "zod";
 import { config } from "./config.js";
 import { db, healthcheck } from "./db.js";
 import { loadDss, loadDssSource } from "./dss-api.js";
+import {createHousehold} from './household-number.js';
 import { simulateDss, simulationInput } from './dss-simulation.js';
 import {responseManagementRouter} from './response-management.js';
 import {communitySupportRouter} from './community-support.js';
@@ -306,15 +307,14 @@ const userInput = z.object({
 });
 
 async function linkResidentAccount(connection: any, userId: string, input: z.infer<typeof userInput>) {
-  if (input.role === 'Resident') {
-    if (!input.residentId) throw new z.ZodError([{code:'custom',path:['residentId'],message:'Select the resident record for this account.'}]);
+  if (input.role === 'Resident' && input.residentId) {
     const [records] = await connection.query("SELECT r.resident_id FROM residents r JOIN households h ON h.household_id=r.household_id WHERE r.resident_id=? AND r.record_status='Active' AND h.verification_status='Verified' FOR UPDATE", [input.residentId]);
     if (!records.length) throw new z.ZodError([{code:'custom',path:['residentId'],message:'Choose an active resident in a verified household.'}]);
     const [linked] = await connection.query('SELECT user_id FROM resident_accounts WHERE resident_id=? AND user_id<>?', [input.residentId,userId]);
     if (linked.length) throw new z.ZodError([{code:'custom',path:['residentId'],message:'This resident already has an account.'}]);
   }
   await connection.execute('DELETE FROM resident_accounts WHERE user_id=?', [userId]);
-  if (input.role === 'Resident') await connection.execute('INSERT INTO resident_accounts(user_id,resident_id) VALUES(?,?)', [userId,input.residentId]);
+  if (input.role === 'Resident' && input.residentId) await connection.execute('INSERT INTO resident_accounts(user_id,resident_id) VALUES(?,?)', [userId,input.residentId]);
 }
 
 async function ensureUniqueUserIdentity(username: string, email: string, excludedUserId?: string) {
@@ -332,28 +332,34 @@ async function ensureUniqueUserIdentity(username: string, email: string, exclude
   throw new z.ZodError([{ code: "custom", path: [field], message: `That ${field} is already used by another account` }]);
 }
 
+app.get('/api/auth/registration-zones', asyncRoute(async (_req,res)=>{
+  const [zones]=await db.query('SELECT zone_id,zone_name FROM zones ORDER BY zone_name');
+  res.json(zones);
+}));
 app.post('/api/auth/register', asyncRoute(async (req, res) => {
   const input = z.object({
     fullName: userInput.shape.fullName.max(160), username: userInput.shape.username.max(80), email: userInput.shape.email.max(190),
     password: userInput.shape.password.unwrap().max(128),
     dateOfBirth: z.iso.date().refine(value => value <= new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Shanghai'}), 'Birth date cannot be in the future.'),
     contactNumber: z.string().trim().min(7).max(30).regex(/^\+?[0-9() -]+$/, 'Enter a valid contact number.').refine(value => value.replace(/\D/g,'').length >= 7, 'Enter a valid contact number.'),
-    addressLine: z.string().trim().min(5).max(255), householdNumber: z.string().trim().max(80).optional().default('')
+    addressLine: z.string().trim().min(5).max(255).default('Colacling'), zoneId:z.uuid()
   }).parse(req.body);
   await ensureUniqueUserIdentity(input.username, input.email);
   const user: AuthUser = {userId: randomUUID(), username: input.username, role: 'Resident', credentialVersion: 0};
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
+    const [zones]=await connection.query<any[]>('SELECT zone_id FROM zones WHERE zone_id=? FOR SHARE',[input.zoneId]);
+    if(!zones.length)throw new z.ZodError([{code:'custom',path:['zoneId'],message:'Select an existing zone.'}]);
     await connection.execute("INSERT INTO users(user_id,full_name,username,email,password_hash,role) VALUES(?,?,?,?,?,'Resident')", [user.userId,input.fullName,input.username,input.email,await bcrypt.hash(input.password,12)]);
-    await connection.execute('INSERT INTO resident_registrations(user_id,date_of_birth,contact_number,address_line,household_number) VALUES(?,?,?,?,?)', [user.userId,input.dateOfBirth,input.contactNumber,input.addressLine,input.householdNumber || null]);
+    await connection.execute('INSERT INTO resident_registrations(user_id,date_of_birth,contact_number,address_line,zone_id) VALUES(?,?,?,?,?)', [user.userId,input.dateOfBirth,input.contactNumber,input.addressLine,input.zoneId]);
     await connection.commit();
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
   res.status(201).json({message:'Registration submitted. You can sign in after the barangay secretary validates and approves your account.'});
 }));
 
 app.get('/api/resident-registrations', requireAuth, requireRoles('Super Admin','Secretary'), asyncRoute(async (req,res) => paginated(res,'resident_registrations s JOIN users u ON u.user_id=s.user_id',req,{
-  columns:'s.*,CAST(s.date_of_birth AS CHAR) date_of_birth,u.full_name,u.username,u.email,u.is_active,(SELECT resident_id FROM resident_accounts a WHERE a.user_id=s.user_id) linked_resident_id',
+  columns:'s.*,CAST(s.date_of_birth AS CHAR) date_of_birth,u.full_name,u.username,u.email,u.is_active,(SELECT zone_name FROM zones z WHERE z.zone_id=s.zone_id) zone_name,(SELECT resident_id FROM resident_accounts a WHERE a.user_id=s.user_id) linked_resident_id',
   searchColumns:['u.full_name','u.username','s.household_number','s.address_line'],sortFields:['s.created_at'],
   filterFields:{status:{column:'s.status',exact:true}}
 })));
@@ -367,10 +373,11 @@ app.get('/api/resident-registrations/households', requireAuth, requireRoles('Sup
 })));
 app.post('/api/resident-registrations/:id/review', requireAuth, requireRoles('Super Admin','Secretary'), asyncRoute(async (req:AuthRequest,res) => {
   const input=z.object({status:z.enum(['Approved','Rejected']),residentId:z.uuid().optional(),newResident:z.object({
-    householdId:z.uuid(),fullName:z.string().trim().min(2).max(160),dateOfBirth:residentImportSchema.shape.date_of_birth,
+    householdId:z.uuid().optional(),zoneId:z.uuid().optional(),fullName:z.string().trim().min(2).max(160),dateOfBirth:residentImportSchema.shape.date_of_birth,
     sex:residentImportSchema.shape.sex,addressLine:z.string().trim().min(5).max(255),contactNumber:z.string().trim().max(30),priorityLevel:residentImportSchema.shape.priority_level
   }).strict().optional(),notes:z.string().trim().max(1000).default(''),confirmed:z.boolean().default(false)}).parse(req.body);
-  if(input.status==='Approved' && (!input.confirmed || Boolean(input.residentId) === Boolean(input.newResident))) return res.status(400).json({message:'Select an existing resident or add a new resident, and confirm identity and household validation.'});
+  if(input.status==='Approved' && (!input.confirmed || (input.residentId && input.newResident))) return res.status(400).json({message:'Confirm identity validation and choose at most one resident record.'});
+  if(input.newResident && Boolean(input.newResident.householdId)===Boolean(input.newResident.zoneId)) return res.status(400).json({message:'Select an existing household or a zone for a new household.'});
   if(input.status==='Rejected' && input.newResident) return res.status(400).json({message:'A rejected registration cannot create a resident.'});
   if(input.status==='Rejected' && input.notes.length<5) return res.status(400).json({message:'Explain why the registration is rejected.'});
   const userId=String(req.params.id), connection=await db.getConnection();
@@ -378,18 +385,22 @@ app.post('/api/resident-registrations/:id/review', requireAuth, requireRoles('Su
     await connection.beginTransaction();
     const [requests]=await connection.query<any[]>("SELECT s.status,u.role,u.is_active,a.resident_id FROM resident_registrations s JOIN users u ON u.user_id=s.user_id LEFT JOIN resident_accounts a ON a.user_id=s.user_id WHERE s.user_id=? FOR UPDATE",[userId]);
     if(!requests[0]) {await connection.rollback();return res.status(404).json({message:'Registration not found.'});}
-    const repairingApprovedLink=requests[0].status==='Approved' && input.status==='Approved' && !requests[0].resident_id;
+    const repairingApprovedLink=requests[0].status==='Approved' && input.status==='Approved' && !requests[0].resident_id && Boolean(input.residentId || input.newResident);
     if((requests[0].status!=='Pending' && !repairingApprovedLink) || requests[0].role!=='Resident' || !requests[0].is_active) {await connection.rollback();return res.status(409).json({message:'This registration has changed or the account is inactive. Refresh the review queue.'});}
-    if(repairingApprovedLink && input.newResident) {await connection.rollback();return res.status(400).json({message:'Repair an approved account by linking an existing resident record.'});}
     if(input.status==='Approved') {
       let residentId=input.residentId;
       if(input.newResident) {
-        const resident=input.newResident;
+        const resident={...input.newResident};
+        if(resident.zoneId){
+          const household=await createHousehold(connection,{zoneId:resident.zoneId,addressLine:resident.addressLine,headOfHouseholdName:resident.fullName,contactNumber:resident.contactNumber,verificationStatus:'Verified'});
+          resident.householdId=household.id;
+          await connection.execute('UPDATE resident_registrations SET household_number=? WHERE user_id=?',[household.householdNumber,userId]);
+        }
         const [households]=await connection.query<any[]>("SELECT household_id FROM households WHERE household_id=? AND verification_status='Verified' FOR UPDATE",[resident.householdId]);
         if(!households.length) throw new z.ZodError([{code:'custom',path:['householdId'],message:'Choose a verified household before adding this resident.'}]);
         await validateResource('residents',resident,undefined,connection);
         residentId=randomUUID();
-        await connection.execute('INSERT INTO residents(resident_id,household_id,full_name,date_of_birth,sex,address_line,contact_number,priority_level) VALUES(?,?,?,?,?,?,?,?)',[residentId,resident.householdId,resident.fullName,resident.dateOfBirth,resident.sex,resident.addressLine,resident.contactNumber || null,resident.priorityLevel]);
+        await connection.execute('INSERT INTO residents(resident_id,household_id,full_name,date_of_birth,sex,address_line,contact_number,priority_level) VALUES(?,?,?,?,?,?,?,?)',[residentId,resident.householdId!,resident.fullName,resident.dateOfBirth,resident.sex,resident.addressLine,resident.contactNumber || null,resident.priorityLevel]);
       }
       await linkResidentAccount(connection,userId,{fullName:'',username:'',email:'',role:'Resident',residentId});
     }
@@ -397,7 +408,7 @@ app.post('/api/resident-registrations/:id/review', requireAuth, requireRoles('Su
     await connection.execute('UPDATE resident_registrations SET status=?,review_notes=?,reviewed_by_user_id=?,reviewed_at=NOW() WHERE user_id=?',[input.status,input.notes,req.user!.userId,userId]);
     await connection.commit();
   } catch(error) {await connection.rollback();throw error;} finally {connection.release();}
-  res.json({message:`Resident registration ${input.status.toLowerCase()}${input.status==='Approved' ? ' and linked' : ''}.`});
+  res.json({message:`Resident registration ${input.status.toLowerCase()}.`});
 }));
 
 app.get("/api/users", requireAuth, requireRoles("Super Admin"), asyncRoute(async (req, res) => paginated(res, "users", req, {
@@ -870,7 +881,7 @@ const resources: Record<string, ResourceConfig> = {
         ELSE 'Safe' END evacuation_status`,
     readRoles: ["Super Admin", "Disaster Officer", "Data Encoder"], writeRoles: ["Super Admin", "Disaster Officer", "Data Encoder"],
     fields: { householdNumber: "household_number", zoneId: "zone_id", addressLine: "address_line", headOfHouseholdName: "head_of_household_name", contactNumber: "contact_number", verificationStatus: "verification_status" },
-    required: ["householdNumber", "zoneId", "addressLine", "headOfHouseholdName"],
+    required: ["zoneId", "addressLine", "headOfHouseholdName"],
     searchColumns: ["h.household_number", "h.address_line", "h.head_of_household_name", "h.verification_status"], sortFields: ["household_number", "household_sort_key", "address_line", "verification_status", "created_at", "updated_at"],
     filterFields: { zone: { column: "h.zone_id", exact: true } }
   },
@@ -1370,6 +1381,13 @@ for (const [path, resource] of Object.entries(resources)) {
       return res.status(400).json({ message: "Current occupancy cannot exceed capacity" });
     }
     await validateResource(path, req.body);
+    if(path==='households'){
+      const input=z.object({zoneId:z.uuid(),addressLine:z.string().trim().min(5).max(255),headOfHouseholdName:z.string().trim().min(2).max(160),contactNumber:z.string().trim().max(30).optional(),verificationStatus:z.enum(['Pending Verification','Verified','Rejected']).optional()}).parse(req.body);
+      const connection=await db.getConnection();
+      try {await connection.beginTransaction();const result=await createHousehold(connection,input);await connection.commit();res.status(201).json(result);}
+      catch(error){await connection.rollback();throw error;}finally{connection.release();}
+      return;
+    }
     const entries = Object.entries(resource.fields).filter(([field]) => req.body[field] !== undefined);
     const recordId = randomUUID();
     const values = entries.map(([field]) => resource.jsonFields?.includes(field) ? JSON.stringify(req.body[field]) : req.body[field]);
@@ -1380,6 +1398,7 @@ for (const [path, resource] of Object.entries(resources)) {
     res.status(201).json({ id: recordId });
   }));
   app.put(`/api/${path}/:id`, requireAuth, requireRoles(...resource.writeRoles), asyncRoute(async (req, res) => {
+    if(path==='households')delete req.body.householdNumber;
     if (path === "shelters" && req.body.currentOccupancy !== undefined && req.body.capacity !== undefined && Number(req.body.currentOccupancy) > Number(req.body.capacity)) {
       return res.status(400).json({ message: "Current occupancy cannot exceed capacity" });
     }

@@ -114,10 +114,14 @@
   <section class="panel weekly-report statistics-tab-panel" [hidden]="activeTab !== 'reports'" aria-labelledby="weekly-report-heading">
     <div class="weekly-report-header">
       <div><span class="eyebrow">RECORDED INCIDENT SUMMARY</span><h2 id="weekly-report-heading">Weekly Flood Monitoring Report</h2><p>Summarizes incident reports recorded during the selected Monday-to-Sunday period. It does not predict future floods.</p></div>
-      <div class="weekly-report-actions"><label>Choose a date within the week<input type="date" [ngModel]="weeklyDate" (ngModelChange)="changeWeeklyDate($event)" [disabled]="loading" /></label><button type="button" class="refresh-button" (click)="printWeeklyReport()" [disabled]="loading || !weeklyPeriodApplied">Print / Save PDF</button><button type="button" class="apply-filter-button" (click)="downloadWeeklyReport()" [disabled]="loading || !weeklyPeriodApplied">Download Word</button></div>
+      <div class="weekly-report-actions"><label>Choose a date within the week<input type="date" [ngModel]="weeklyDate" (ngModelChange)="changeWeeklyDate($event)" [disabled]="loading" /></label><button type="button" class="refresh-button" (click)="applyWeeklyPeriod()" [disabled]="loading">Refresh report</button><button type="button" class="refresh-button" (click)="printWeeklyReport()" [disabled]="!weeklyPeriodApplied">Print / Save PDF</button><button type="button" class="apply-filter-button" (click)="downloadWeeklyReport()" [disabled]="!weeklyPeriodApplied">Download Word</button></div>
     </div>
     <p class="weekly-period"><b>Reporting period:</b> {{weeklyPeriod.from | date:'mediumDate':'+0800'}}–{{weeklyPeriod.to | date:'mediumDate':'+0800'}}</p>
     @if(weeklyDownloadMessage){<p class="notice" role="status">{{weeklyDownloadMessage}}</p>}
+    @if(loading){<p role="status">Updating the weekly report…</p>}
+    @if(weeklyError){<p class="form-error" role="alert">{{weeklyError}}</p>}
+    @if(weeklyPeriodApplied){
+    <p>Updated {{weeklyData?.generatedAt | date:'medium':'+0800'}} · All zones and flood levels in the selected week</p>
     <div class="weekly-summary" aria-label="Weekly report summary">
       <span><b>{{weeklySummary.total}}</b>Total records</span><span><b>{{weeklySummary.validated}}</b>Validated</span><span><b>{{weeklySummary.pending}}</b>Pending verification</span><span><b>{{weeklyAffectedZones}}</b>Affected zones</span>
     </div>
@@ -125,8 +129,9 @@
     <h3>Daily record summary</h3>
     <div class="table-scroll"><table><thead><tr><th>Date</th><th>Total records</th><th>Validated</th><th>Pending</th><th>Major</th><th>Affected zones</th></tr></thead><tbody>@for(row of weeklyDailyRows;track row.date){<tr><td>{{row.date | date:'mediumDate':'+0800'}}</td><td>{{row.total}}</td><td>{{row.validated}}</td><td>{{row.pending}}</td><td>{{row.major}}</td><td>{{row.zones.join(', ') || 'None recorded'}}</td></tr>}</tbody></table></div>
     <h3>Incident records</h3>
-    <div class="table-scroll"><table><thead><tr><th>Tracking code / location</th><th>Type</th><th>Affected zones</th><th>Severity</th><th>Status</th><th>Reported</th></tr></thead><tbody>@for(record of weeklyRecords;track record.id){<tr><td><b>{{record.code}}</b><small>{{record.location}}</small></td><td>{{record.incidentType}}</td><td>{{record.zones.join(', ') || 'Not assigned'}}</td><td>{{record.severity}}</td><td>{{record.status}}</td><td>{{record.createdAt | date:'medium':'+0800'}}</td></tr>}@empty{<tr><td colspan="6" class="empty">No incident reports were recorded during this week.</td></tr>}</tbody></table></div>
+    <div class="table-scroll"><table><thead><tr><th>Tracking code / location</th><th>Type</th><th>Affected zones</th><th>Severity</th><th>Status</th><th>Date &amp; time reported</th></tr></thead><tbody>@for(record of weeklyRecords;track record.id){<tr><td><b>{{record.code}}</b><small>{{record.location}}</small></td><td>{{record.incidentType}}</td><td>{{record.zones.join(', ') || 'Not assigned'}}</td><td>{{record.severity}}</td><td>{{record.status}}</td><td>{{weeklyRecordDate(record.createdAt) | date:'medium':'+0800'}}</td></tr>}@empty{<tr><td colspan="6" class="empty">No incident reports were recorded during this week.</td></tr>}</tbody></table></div>
     <footer>The downloadable Word document and printable PDF view contain the summary, daily totals, and incident records shown here. Dates are based on report creation time.</footer>
+    }
   </section>
   }
   @if (mode === 'statistics') {

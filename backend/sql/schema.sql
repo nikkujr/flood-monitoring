@@ -117,13 +117,15 @@ CREATE TABLE IF NOT EXISTS resident_registrations (
   contact_number VARCHAR(30) NOT NULL,
   address_line VARCHAR(255) NOT NULL,
   household_number VARCHAR(80) NULL,
+  zone_id CHAR(36) NULL,
   status ENUM('Pending','Approved','Rejected') NOT NULL DEFAULT 'Pending',
   review_notes VARCHAR(1000) NULL,
   reviewed_by_user_id CHAR(36) NULL,
   reviewed_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-  FOREIGN KEY (reviewed_by_user_id) REFERENCES users(user_id) ON DELETE SET NULL
+  FOREIGN KEY (reviewed_by_user_id) REFERENCES users(user_id) ON DELETE SET NULL,
+  FOREIGN KEY (zone_id) REFERENCES zones(zone_id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS resident_accounts (

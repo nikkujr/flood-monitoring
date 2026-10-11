@@ -296,3 +296,12 @@ Response action storage and backend APIs remain available; removing the page doe
 - Assistance Assessment is separate from Requests & Follow-up. Existing URLs and role access are preserved. Resident self-service check-in cards and small summary panels are retained.
 - Current-year resident searches query live records and never rebuild annual archives. Capture annual archive is a confirmed Super Admin action; confirm the final capture before year end. Historical imports remain isolated.
 - Automated verification: backend TypeScript and Angular production builds; assistance/contact integration checks; rescue pagination (31 archived records), summary assignment integrity, on-demand detail/history, and existing dispatch/arrival/outcome regression checks; historical import and live-read archive-preservation checks. Live browser/mobile visual verification is outstanding because the desktop browser tool failed to start with a sandbox error.
+
+## Registration and weekly report updates
+
+- Register without signing in. Confirm that zone selection is required, the address starts as Colacling, and no household number is entered manually. Pending and rejected applicants cannot sign in.
+- Approve a registration without a resident link after confirming identity. Confirm that sign-in works and flood reporting remains unavailable until a valid resident link is saved. Test linking an existing resident and adding a new resident with an existing verified household or a newly created household.
+- Save two new households in the same zone concurrently. Confirm unique consecutive numbers after the highest existing suffix, and confirm that another zone starts its own sequence. Failed resident approval must leave no partial household or resident.
+- Open Reports & Statistics in a week with no incidents. Confirm that it stays on the current week. Select a historical week, apply assessment filters, and confirm that weekly totals still include all reports for that week. Refresh after a report changes, then check the downloaded Word document and printable PDF view against the displayed summary.
+- Check reports around midnight and Sunday-to-Monday boundaries using Philippine time. Confirm that Flood Reports displays both the date and time.
+- Automated checks: run `npm run test:weekly-report` from frontend and `node --import tsx src/polish-requirements.integration.test.ts` from backend with PORT matching a local API. The API check cleans up its temporary records.

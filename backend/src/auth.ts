@@ -18,9 +18,7 @@ export async function assertResidentApproved(user: AuthUser, connection: typeof 
   if (account?.registration_status && account.registration_status !== 'Approved') {
     throw Object.assign(new Error('Your resident registration is still awaiting approval by the barangay secretary.'), {status:403});
   }
-  if (!account?.resident_id) {
-    throw Object.assign(new Error('Your approved account is not linked to a resident record. Ask the barangay secretary to repair the resident link.'), {status:403});
-  }
+  if (!account?.resident_id) return;
   if (account.record_status !== 'Active') {
     throw Object.assign(new Error('Your linked resident record is inactive. Ask the barangay office to reactivate or update it.'), {status:403});
   }

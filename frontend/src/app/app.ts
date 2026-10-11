@@ -216,7 +216,7 @@ export class App implements OnInit, OnDestroy {
   openRegistrationReview(registration: Record<string, any>, dialog: HTMLDialogElement) {
     this.registrationReview = registration; this.registrationReviewError = ''; this.editorValues = {}; this.selectedAccountResident = undefined;
     this.registrationAddResident = false;this.registrationHouseholdQuery = '';this.registrationHouseholds = [];
-    this.registrationResident = {householdId:'',fullName:registration['full_name'],dateOfBirth:registration['date_of_birth'],contactNumber:registration['contact_number'],addressLine:registration['address_line'],sex:'',priorityLevel:''};
+    this.registrationResident = {householdId:'',zoneId:registration['zone_id'] || '',fullName:registration['full_name'],dateOfBirth:registration['date_of_birth'],contactNumber:registration['contact_number'],addressLine:registration['address_line'],sex:'',priorityLevel:''};
     dialog.querySelector<HTMLFormElement>('form')?.reset();
     dialog.showModal();
   }
@@ -226,8 +226,9 @@ export class App implements OnInit, OnDestroy {
     this.registrationReviewError = '';
     const residentId = this.editorValue('residentId');
     const newResident = status === 'Approved' && this.registrationAddResident ? {...this.registrationResident} : undefined;
-    if (status === 'Approved' && ((!newResident && !residentId) || !confirmed)) {this.registrationReviewError = 'Select or add the resident and confirm identity and household validation.'; return;}
-    if (newResident && ['householdId','fullName','dateOfBirth','sex','addressLine','priorityLevel'].some(field => !newResident[field]?.trim())) {this.registrationReviewError = 'Complete the new resident details and select a verified household.'; return;}
+    if (status === 'Approved' && !confirmed) {this.registrationReviewError = 'Confirm that you have validated the applicant’s identity.'; return;}
+    if (newResident && (['fullName','dateOfBirth','sex','addressLine','priorityLevel'].some(field => !newResident[field]?.trim()) || !newResident['householdId'] || (newResident['householdId']==='new'&&!newResident['zoneId']))) {this.registrationReviewError = 'Complete the resident details and choose an existing household or a zone for a new household.'; return;}
+    if(newResident){if(newResident['householdId']==='new')delete newResident['householdId'];else delete newResident['zoneId'];}
     if (status === 'Rejected' && notes.trim().length < 5) {this.registrationReviewError = 'Explain why the registration is rejected.'; return;}
     this.registrationReviewBusy = true;
     this.api.create<{message:string}>('resident-registrations/' + this.registrationReview['user_id'] + '/review',{status,residentId:newResident ? undefined : residentId || undefined,newResident,notes,confirmed}).pipe(finalize(() => {this.registrationReviewBusy = false; this.changeDetector.detectChanges();})).subscribe({
@@ -614,6 +615,17 @@ export class App implements OnInit, OnDestroy {
   householdLookupOpen = false;
   householdLookupQuery = '';
   zoneOptions: EditorOption[] = [];
+  registrationZones: {zone_id:string;zone_name:string}[] = [];
+  registrationZonesLoading = false;
+  registrationZonesError = '';
+  loadRegistrationZones() {
+    if(this.registrationZonesLoading)return;
+    this.registrationZonesLoading=true;this.registrationZonesError='';
+    this.api.registrationZones().pipe(finalize(()=>{this.registrationZonesLoading=false;this.changeDetector.detectChanges();})).subscribe({
+      next:zones=>this.registrationZones=zones.sort((a,b)=>a.zone_name.localeCompare(b.zone_name,undefined,{numeric:true})),
+      error:()=>this.registrationZonesError='Zones could not be loaded. Please retry.'
+    });
+  }
   shelterOptions: EditorOption[] = [];
   private rawRecords = new Map<string, Record<string, unknown>>();
   private resourceRequestId = 0;
@@ -759,7 +771,7 @@ export class App implements OnInit, OnDestroy {
       users: [{ label: 'RECORD', field: 'full_name' }, { label: 'DETAILS', field: 'email' }, { label: 'STATUS', field: 'role' }, { label: 'UPDATED', field: 'created_at' }],
       residents: [{ label: 'RECORD', field: 'r.full_name' }, { label: 'DETAILS', field: 'r.address_line' }, { label: 'STATUS', field: 'r.evacuation_status' }, { label: 'UPDATED', field: 'r.updated_at' }],
       households: [{ label: 'RECORD', field: 'household_number' }, { label: 'DETAILS', field: 'address_line' }, { label: 'STATUS', field: 'verification_status' }, { label: 'UPDATED', field: 'updated_at' }],
-      'flood-reports': [{ label: 'TIME', field: 'created_at' }, { label: 'ZONE / LOCATION', field: 'location_text' }, { label: 'FLOOD LEVEL', field: 'severity_level' }, { label: 'STATUS', field: 'status' }],
+      'flood-reports': [{ label: 'DATE & TIME', field: 'created_at' }, { label: 'ZONE / LOCATION', field: 'location_text' }, { label: 'FLOOD LEVEL', field: 'severity_level' }, { label: 'STATUS', field: 'status' }],
       'barangay-zones': [{ label: 'MAP RECORD', field: 'zone_name' }, { label: 'DETAILS', field: 'updated_at' }, { label: 'UPDATED', field: 'updated_at' }],
       'risk-zones': [{ label: 'MAP RECORD', field: 'risk_zone_name' }, { label: 'DETAILS', field: 'risk_level' }, { label: 'UPDATED', field: 'updated_at' }],
       shelters: [{ label: 'RECORD', field: 'shelter_name' }, { label: 'DETAILS', field: 'current_occupancy' }, { label: 'STATUS', field: 'status' }, { label: 'UPDATED', field: 'updated_at' }],
@@ -853,7 +865,7 @@ export class App implements OnInit, OnDestroy {
         { name: 'fullName', label: 'Full name', required: true }, { name: 'username', label: 'Username', required: true },
         { name: 'email', label: 'Email', type: 'email', required: true },
         { name: 'role', label: 'Role', type: 'select', required: true, options: options('Super Admin', 'Disaster Officer', 'Data Encoder', 'Resident', 'Secretary') },
-        { name: 'residentId', label: 'Linked resident (required for Resident accounts)', type: 'resident-lookup' },
+        { name: 'residentId', label: 'Linked resident (optional)', type: 'resident-lookup' },
         { name: 'password', label: this.editorId ? 'New password (leave blank to keep current)' : 'Initial password', type: 'password', required: !this.editorId,
           placeholder: '12+ characters with uppercase, lowercase, and number' }
       ],
@@ -885,7 +897,7 @@ export class App implements OnInit, OnDestroy {
         { name: 'evacuationShelterId', label: 'Evacuation center', type: 'select', options: this.shelterOptions }
       ],
       households: [
-        { name: 'householdNumber', label: 'Household number', required: true },
+        ...(this.editorId ? [{ name: 'householdNumber', label: 'Household number (assigned automatically)', type: 'text' as const }] : []),
         { name: 'zoneId', label: 'Zone', type: 'select', required: true, options: this.zoneOptions },
         { name: 'addressLine', label: 'Address', required: true }, { name: 'headOfHouseholdName', label: 'Head of household', required: true },
         { name: 'contactNumber', label: 'Contact number', type: 'tel', placeholder: '0917 123 4567 or (054) 123 4567' },
@@ -952,6 +964,7 @@ export class App implements OnInit, OnDestroy {
 
   ngOnInit() {
     this.restoreRoute(true);
+    this.loadRegistrationZones();
     window.addEventListener('popstate', this.popStateHandler);
     this.clockTimer = window.setInterval(() => {
       this.liveNow.set(new Date());
@@ -1073,6 +1086,7 @@ export class App implements OnInit, OnDestroy {
   }
 
   navigatePublic(page: PublicPage, replace = false) {
+    if(page==='register')this.loadRegistrationZones();
     if (page === 'login') this.residentLoginPage = this.publicPage === 'report' ? 'report' : 'account';
     this.errorMessage = ''; this.successMessage = ''; this.fieldErrors = {};
     if (this.isResident && (page === 'account' || page === 'report')) this.loadAccount();
@@ -2459,7 +2473,7 @@ export class App implements OnInit, OnDestroy {
     const value = this.reportTableRecord(row)['created_at'];
     if (!value) return '—';
     const date = new Date(String(value));
-    return Number.isNaN(date.getTime()) ? '—' : new Intl.DateTimeFormat('en-PH', { hour: '2-digit', minute: '2-digit', hour12: true }).format(date);
+    return Number.isNaN(date.getTime()) ? '—' : new Intl.DateTimeFormat('en-PH', {timeZone:'Asia/Manila',dateStyle:'medium',timeStyle:'short'}).format(date);
   }
 
   private loadAdminReportPhotos(reportId: string, photos: unknown) {
@@ -2649,7 +2663,7 @@ export class App implements OnInit, OnDestroy {
     if (!row['is_active']) return `${row['role']} · Inactive`;
     if (row['role'] !== 'Resident') return String(row['role'] ?? 'Active');
     if (row['registration_status'] && row['registration_status'] !== 'Approved') return `Resident · ${row['registration_status']}`;
-    if (!row['resident_id']) return 'Resident · Link missing';
+    if (!row['resident_id']) return 'Resident · No linked record';
     if (row['linked_resident_status'] !== 'Active') return 'Resident · Record inactive';
     if (row['linked_household_status'] !== 'Verified') return 'Resident · Household unverified';
     return 'Resident · Ready';

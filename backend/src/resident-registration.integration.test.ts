@@ -21,7 +21,7 @@ try {
   await db.execute('INSERT INTO zones(zone_id,zone_name,polygon_geojson) VALUES(?,?,?)',[zone,name,JSON.stringify({type:'Polygon',coordinates:[[[122.884,13.782],[122.886,13.782],[122.886,13.784],[122.884,13.784],[122.884,13.782]]]})]);
   await db.execute("INSERT INTO households(household_id,household_number,zone_id,address_line,head_of_household_name,verification_status) VALUES(?,?,?,?,?,'Verified')",[household,name,zone,'Colacling test address','Test head']);
   await db.execute("INSERT INTO residents(resident_id,household_id,full_name,date_of_birth,sex,address_line,contact_number) VALUES(?,?,?,'2000-01-01','Female','Colacling test address','09123456789')",[resident,household,name]);
-  const input={fullName:name,username:`registration-${randomUUID()}`,email:`${randomUUID()}@example.test`,password:'SelfRegistration123',dateOfBirth:'2000-01-01',contactNumber:'09123456789',addressLine:'Colacling test address',householdNumber:name};
+  const input={fullName:name,username:`registration-${randomUUID()}`,email:`${randomUUID()}@example.test`,password:'SelfRegistration123',dateOfBirth:'2000-01-01',contactNumber:'09123456789',addressLine:'Colacling test address',zoneId:zone};
   await request('auth/register','POST',{...input,password:'weak'},undefined,400);
   await request('auth/register','POST',{...input,dateOfBirth:'2000-02-30'},undefined,400);
   await request('auth/register','POST',{...input,contactNumber:'-------'},undefined,400);
@@ -63,11 +63,10 @@ try {
   const approvedLogin=await request('auth/login','POST',{username:input.username,password:input.password});
   const me=await request('auth/me','GET',undefined,approvedLogin.accessToken);assert.equal(me.registration.status,'Approved');assert.equal(me.resident.resident_id,resident);
   const [audit]=await db.query<any[]>('SELECT reviewed_by_user_id,reviewed_at FROM resident_registrations WHERE user_id=?',[userId]);assert.equal(audit[0].reviewed_by_user_id,secretary);assert.ok(audit[0].reviewed_at);
-  // Older/migrated data can contain an approved registration whose resident
-  // link is missing. It must remain blocked until a secretary explicitly
-  // repairs the link, after which normal login works again.
+  // Approved accounts can sign in without a link, but cannot report flooding.
   await db.execute('DELETE FROM resident_accounts WHERE user_id=?',[userId]);
-  await request('auth/login','POST',{username:input.username,password:input.password},undefined,403);
+  const unlinked=await request('auth/login','POST',{username:input.username,password:input.password});
+  await request('flood-reports','POST',report,unlinked.accessToken,403);
   const approvedQueue=await request('resident-registrations?filter_status=Approved&sortBy=s.created_at','GET',undefined,secretaryToken);
   const brokenApproval=approvedQueue.items.find((item:any)=>item.user_id===userId);assert.ok(brokenApproval);assert.equal(brokenApproval.linked_resident_id,null);
   await request(reviewPath,'POST',approve,secretaryToken);

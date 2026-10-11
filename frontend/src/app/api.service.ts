@@ -87,6 +87,9 @@ export class ApiService {
     }));
   }
 
+  registrationZones() {
+    return this.http.get<{zone_id:string;zone_name:string}[]>(`${this.baseUrl}/auth/registration-zones`);
+  }
   register(body: Record<string, unknown>) {
     return this.http.post<{message:string}>(`${this.baseUrl}/auth/register`,body);
   }

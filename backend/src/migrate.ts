@@ -105,6 +105,17 @@ try {
     `);
   }
 
+  const [registrationZoneColumns]=await connection.query<mysql.RowDataPacket[]>(
+    "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='resident_registrations' AND COLUMN_NAME='zone_id'",[databaseName]
+  );
+  if(!registrationZoneColumns.length){
+    const [zoneIdColumns]=await connection.query<mysql.RowDataPacket[]>(
+      "SELECT COLUMN_TYPE,CHARACTER_SET_NAME,COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='zones' AND COLUMN_NAME='zone_id'",[databaseName]
+    );
+    const zoneIdDefinition=compatibleIdDefinition(zoneIdColumns[0]!);
+    await connection.query(`ALTER TABLE \`${databaseName}\`.resident_registrations ADD COLUMN zone_id ${zoneIdDefinition} NULL, ADD FOREIGN KEY (zone_id) REFERENCES zones(zone_id) ON DELETE SET NULL`);
+  }
+
   const [residentIdColumns] = await connection.query<mysql.RowDataPacket[]>(
     "SELECT COLUMN_TYPE,CHARACTER_SET_NAME,COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='residents' AND COLUMN_NAME='resident_id'",
     [databaseName]
